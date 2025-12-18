@@ -1,39 +1,57 @@
 import React, { useState } from 'react';
 import { Play, Pause, SkipBack, SkipForward, RotateCcw, Clock } from 'lucide-react';
+import { getAllTimelineEvents, getEventsForYear, getMajorTimelineEvents } from '../services/timelineEvents';
 
 interface TimelineControlsProps {
   currentYear: number;
   onYearChange: (year: number) => void;
+  onEventFocus?: (coordinates: [number, number], eventData: any) => void;
 }
 
 export const TimelineControls: React.FC<TimelineControlsProps> = ({
   currentYear,
-  onYearChange
+  onYearChange,
+  onEventFocus
 }) => {
   const [isPlaying, setIsPlaying] = useState(false);
   const [playbackSpeed, setPlaybackSpeed] = useState(1);
   const [isExpanded, setIsExpanded] = useState(false);
   
-  const minYear = 1900;
+  const minYear = -5000;
   const maxYear = 2024;
+  const [displayRange, setDisplayRange] = useState({ min: 1900, max: 2024 });
+  const allEvents = React.useMemo(() => getAllTimelineEvents(), []);
+  const majorEvents = React.useMemo(() => getMajorTimelineEvents(), []);
   
   React.useEffect(() => {
     let interval: NodeJS.Timeout;
     
     if (isPlaying) {
       interval = setInterval(() => {
-        onYearChange(prevYear => {
-          if (prevYear >= maxYear) {
+        onYearChange((prevYear: number) => {
+          const nextYear = prevYear + (playbackSpeed > 2 ? 5 : 1);
+          
+          if (nextYear > displayRange.max) {
             setIsPlaying(false);
-            return maxYear;
+            return displayRange.max;
           }
-          return prevYear + 1;
+          
+          // Check for events at this year and focus on them
+          const yearEvents = getEventsForYear(nextYear);
+          if (yearEvents.length > 0 && onEventFocus) {
+            const event = yearEvents[0];
+            if (event.coordinates) {
+              onEventFocus(event.coordinates, event);
+            }
+          }
+          
+          return nextYear;
         });
       }, 1000 / playbackSpeed);
     }
     
     return () => clearInterval(interval);
-  }, [isPlaying, playbackSpeed, onYearChange, maxYear]);
+  }, [isPlaying, playbackSpeed, onYearChange, displayRange.max, onEventFocus]);
 
   const handlePlay = () => {
     setIsPlaying(!isPlaying);
@@ -41,22 +59,29 @@ export const TimelineControls: React.FC<TimelineControlsProps> = ({
 
   const handleReset = () => {
     setIsPlaying(false);
-    onYearChange(1900);
+    onYearChange(displayRange.min);
   };
 
   const handleYearChange = (year: number) => {
-    onYearChange(Math.max(minYear, Math.min(maxYear, year)));
+    const clampedYear = Math.max(displayRange.min, Math.min(displayRange.max, year));
+    onYearChange(clampedYear);
+    
+    // Check for events at this year
+    const yearEvents = getEventsForYear(clampedYear);
+    if (yearEvents.length > 0 && onEventFocus) {
+      const event = yearEvents[0];
+      if (event.coordinates) {
+        onEventFocus(event.coordinates, event);
+      }
+    }
   };
 
-  const majorEvents = [
-    { year: 1918, label: 'Spanish Flu', color: '#EF4444' },
-    { year: 1929, label: 'Great Depression', color: '#F59E0B' },
-    { year: 1945, label: 'WWII Ends', color: '#8B5CF6' },
-    { year: 1969, label: 'Moon Landing', color: '#10B981' },
-    { year: 2001, label: '9/11', color: '#EC4899' },
-    { year: 2008, label: 'Financial Crisis', color: '#F59E0B' },
-    { year: 2020, label: 'COVID-19', color: '#EF4444' }
-  ];
+  // Get visible events for current range
+  const visibleEvents = React.useMemo(() => {
+    return allEvents.filter(event => 
+      event.year >= displayRange.min && event.year <= displayRange.max
+    );
+  }, [allEvents, displayRange]);
 
   return (
     <div className="relative">
@@ -79,29 +104,38 @@ export const TimelineControls: React.FC<TimelineControlsProps> = ({
         <div className="relative">
           <input
             type="range"
-            min={minYear}
-            max={maxYear}
+            min={displayRange.min}
+            max={displayRange.max}
             value={currentYear}
             onChange={(e) => handleYearChange(parseInt(e.target.value))}
             className="w-full h-3 bg-gray-700 rounded-lg appearance-none cursor-pointer timeline-slider"
           />
           
-          {/* Major Event Markers */}
+          {/* Event Markers - Show more events */}
           <div className="absolute top-0 left-0 w-full h-3 pointer-events-none">
-            {majorEvents.map(event => {
-              const position = ((event.year - minYear) / (maxYear - minYear)) * 100;
+            {visibleEvents.map((event, idx) => {
+              const position = ((event.year - displayRange.min) / (displayRange.max - displayRange.min)) * 100;
+              // Only show every nth event to avoid overcrowding
+              const shouldShow = visibleEvents.length < 30 || idx % Math.ceil(visibleEvents.length / 30) === 0;
+              if (!shouldShow) return null;
+              
               return (
                 <div
-                  key={event.year}
+                  key={`${event.year}-${idx}`}
                   className="absolute transform -translate-x-1/2 group"
                   style={{ left: `${position}%` }}
                 >
                   <div
-                    className="w-3 h-3 rounded-full border-2 border-white shadow-lg"
+                    className="w-2 h-2 rounded-full border border-white shadow-lg transition-all hover:scale-150"
                     style={{ backgroundColor: event.color }}
                   />
-                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/90 text-white text-xs px-2 py-1 rounded whitespace-nowrap">
-                    {event.year}: {event.label}
+                  <div className="absolute -top-8 left-1/2 transform -translate-x-1/2 opacity-0 group-hover:opacity-100 transition-opacity bg-black/95 text-white text-xs px-2 py-1 rounded whitespace-nowrap z-50">
+                    <div className="font-bold">{event.year}: {event.label}</div>
+                    {event.description && (
+                      <div className="text-xs text-gray-300 max-w-xs">
+                        {event.description.substring(0, 50)}...
+                      </div>
+                    )}
                   </div>
                 </div>
               );
@@ -111,10 +145,10 @@ export const TimelineControls: React.FC<TimelineControlsProps> = ({
         
         {/* Year Labels */}
         <div className="flex justify-between text-xs text-gray-500 mt-2">
-          <span>{minYear}</span>
-          <span>1950</span>
-          <span>2000</span>
-          <span>{maxYear}</span>
+          <span>{displayRange.min}</span>
+          <span>{Math.round(displayRange.min + (displayRange.max - displayRange.min) * 0.33)}</span>
+          <span>{Math.round(displayRange.min + (displayRange.max - displayRange.min) * 0.66)}</span>
+          <span>{displayRange.max}</span>
         </div>
       </div>
 
@@ -170,19 +204,62 @@ export const TimelineControls: React.FC<TimelineControlsProps> = ({
             <option value={1}>1x</option>
             <option value={2}>2x</option>
             <option value={5}>5x</option>
+            <option value={10}>10x</option>
           </select>
         </div>
       </div>
 
-      {/* Current Era Info */}
+      {/* Current Era Info & Range Selector */}
       <div className="mt-4 pt-4 border-t border-gray-700">
-        <div className="text-xs text-gray-400">
-          {currentYear < 1950 && "Early Industrial Era"}
-          {currentYear >= 1950 && currentYear < 1990 && "Post-War Period"}
-          {currentYear >= 1990 && currentYear < 2000 && "Digital Revolution"}
-          {currentYear >= 2000 && currentYear < 2020 && "Information Age"}
-          {currentYear >= 2020 && "Modern Era"}
+        <div className="flex justify-between items-center mb-2">
+          <div className="text-xs text-gray-400">
+            {currentYear < 0 && "Ancient Era"}
+            {currentYear >= 0 && currentYear < 500 && "Classical Era"}
+            {currentYear >= 500 && currentYear < 1000 && "Medieval Era"}
+            {currentYear >= 1000 && currentYear < 1500 && "Late Medieval"}
+            {currentYear >= 1500 && currentYear < 1800 && "Early Modern"}
+            {currentYear >= 1800 && currentYear < 1900 && "Industrial Era"}
+            {currentYear >= 1900 && currentYear < 1950 && "Early 20th Century"}
+            {currentYear >= 1950 && currentYear < 1990 && "Post-War Period"}
+            {currentYear >= 1990 && currentYear < 2000 && "Digital Revolution"}
+            {currentYear >= 2000 && currentYear < 2020 && "Information Age"}
+            {currentYear >= 2020 && "Modern Era"}
+          </div>
+          <select
+            value={`${displayRange.min}-${displayRange.max}`}
+            onChange={(e) => {
+              const [min, max] = e.target.value.split('-').map(Number);
+              setDisplayRange({ min, max });
+              if (currentYear < min || currentYear > max) {
+                onYearChange(min);
+              }
+            }}
+            className="bg-gray-700 text-white text-xs px-2 py-1 rounded border border-gray-600 focus:outline-none focus:border-blue-400"
+          >
+            <option value="-5000-2024">All Time</option>
+            <option value="-3000-0">Ancient</option>
+            <option value="0-1000">Classical</option>
+            <option value="1000-1500">Medieval</option>
+            <option value="1500-1800">Early Modern</option>
+            <option value="1800-1900">19th Century</option>
+            <option value="1900-2024">20th-21st Century</option>
+            <option value="1900-1950">Early 20th</option>
+            <option value="1950-2000">Late 20th</option>
+            <option value="2000-2024">21st Century</option>
+          </select>
         </div>
+        
+        {/* Current Events Display */}
+        {getEventsForYear(currentYear).length > 0 && (
+          <div className="mt-2 p-2 bg-gray-800 rounded text-xs">
+            <div className="font-bold text-white mb-1">Events in {currentYear}:</div>
+            {getEventsForYear(currentYear).slice(0, 3).map((event, idx) => (
+              <div key={idx} className="text-gray-300 mb-1">
+                • {event.label}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
         </div>
       </div>

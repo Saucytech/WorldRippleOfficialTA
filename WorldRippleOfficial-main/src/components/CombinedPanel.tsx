@@ -1,11 +1,12 @@
 import React, { useState } from 'react';
-import { ChevronDown, ChevronUp, ChevronRight, Eye, EyeOff, Activity, Home, Leaf, Vote, TrendingUp, Heart, Database, Brain, Target, Lightbulb, AlertTriangle, Zap, ArrowRight, Layers, Sparkles, ShieldAlert, Factory } from 'lucide-react';
+import { ChevronDown, ChevronUp, ChevronRight, Eye, EyeOff, Activity, Home, Leaf, Vote, TrendingUp, Heart, Database, Brain, Target, Lightbulb, AlertTriangle, Zap, ArrowRight, Layers, Sparkles, ShieldAlert, Factory, Globe } from 'lucide-react';
 import { DataLayer } from '../App';
 import { LayerDataPoint } from '../hooks/useDataCommons';
 import { HistoricalEvent } from '../services/historyApi';
 import { Invention } from '../services/inventionsApi';
 import { InventionDetail } from './InventionDetail';
 import { SearchResultDetail } from './SearchResultDetail';
+import { DataExplorer } from './DataExplorer';
 
 interface SearchResult {
   id: string;
@@ -33,6 +34,7 @@ interface CombinedPanelProps {
   onCloseInvention?: () => void;
   searchResult?: SearchResult | null;
   onCloseSearchResult?: () => void;
+  onShowCategoryEvents?: (categoryId: string) => void;
 }
 
 const layerIcons = {
@@ -66,8 +68,10 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
   invention,
   onCloseInvention,
   searchResult,
-  onCloseSearchResult
+  onCloseSearchResult,
+  onShowCategoryEvents
 }) => {
+  const [activeTab, setActiveTab] = useState<'explore' | 'layers'>('explore');
   const [expandedSection, setExpandedSection] = useState<'layers' | 'insights' | null>('layers');
   const [selectedInsight, setSelectedInsight] = useState<AIInsight | null>(null);
   const [insights, setInsights] = useState<AIInsight[]>([]);
@@ -150,8 +154,49 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
         </div>
       )}
 
-      {/* Data Layers Section */}
-      <div className="border-b border-gray-800">
+      {/* Tab Navigation */}
+      <div className="flex border-b border-gray-800 bg-gray-800/50">
+        <button
+          onClick={() => setActiveTab('explore')}
+          className={`flex-1 px-4 py-3 text-sm font-medium transition-colors flex items-center justify-center ${
+            activeTab === 'explore'
+              ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-900/50'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <Globe className="w-4 h-4 mr-2" />
+          Explore Data
+        </button>
+        <button
+          onClick={() => setActiveTab('layers')}
+          className={`flex-1 px-4 py-3 text-sm font-medium transition-colors flex items-center justify-center ${
+            activeTab === 'layers'
+              ? 'text-blue-400 border-b-2 border-blue-400 bg-gray-900/50'
+              : 'text-gray-400 hover:text-white'
+          }`}
+        >
+          <Layers className="w-4 h-4 mr-2" />
+          Active Layers
+        </button>
+      </div>
+
+      {/* Tab Content */}
+      {activeTab === 'explore' ? (
+        <div className="flex-1 overflow-y-auto">
+          <DataExplorer 
+            onSelectCategory={(categoryId) => {
+              // Show all events for this category on the map
+              if (onShowCategoryEvents) {
+                onShowCategoryEvents(categoryId);
+              }
+            }}
+            activeLayers={dataLayers.filter(l => l.isActive).map(l => l.id)}
+          />
+        </div>
+      ) : (
+        <>
+          {/* Data Layers Section */}
+          <div className="border-b border-gray-800">
         <button
           onClick={() => toggleSection('layers')}
           className="w-full px-4 py-3 flex items-center justify-between hover:bg-gray-800/50 transition-colors"
@@ -172,6 +217,28 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
 
         {expandedSection === 'layers' && (
           <div className="p-4 max-h-[50vh] overflow-y-auto">
+            {/* Show All / Hide All Buttons */}
+            <div className="mb-3 flex gap-2">
+              <button
+                onClick={() => dataLayers.forEach(layer => {
+                  if (!layer.isActive) onToggleLayer(layer.id);
+                })}
+                className="flex-1 py-2 px-3 bg-blue-600 hover:bg-blue-700 text-white text-xs font-medium rounded transition-colors flex items-center justify-center"
+              >
+                <Eye className="w-3.5 h-3.5 mr-1.5" />
+                Show All
+              </button>
+              <button
+                onClick={() => dataLayers.forEach(layer => {
+                  if (layer.isActive) onToggleLayer(layer.id);
+                })}
+                className="flex-1 py-2 px-3 bg-gray-700 hover:bg-gray-600 text-white text-xs font-medium rounded transition-colors flex items-center justify-center"
+              >
+                <EyeOff className="w-3.5 h-3.5 mr-1.5" />
+                Hide All
+              </button>
+            </div>
+
             <div className="space-y-3">
               {dataLayers.map(layer => {
                 const IconComponent = layerIcons[layer.id as keyof typeof layerIcons] || Activity;
@@ -252,7 +319,30 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
 
                     {layer.isExpanded && (
                       <div className="px-3 pb-3 border-t border-gray-700/50">
-                        <div className="mt-2 space-y-1 max-h-48 overflow-y-auto">
+                        {/* Select All / Deselect All buttons for subcategories */}
+                        <div className="mt-2 mb-2 flex gap-1">
+                          <button
+                            onClick={() => {
+                              layer.subcategories.forEach(sub => {
+                                if (!sub.isActive) onToggleSubcategory(layer.id, sub.id);
+                              });
+                            }}
+                            className="flex-1 py-1 px-2 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded transition-colors"
+                          >
+                            Select All
+                          </button>
+                          <button
+                            onClick={() => {
+                              layer.subcategories.forEach(sub => {
+                                if (sub.isActive) onToggleSubcategory(layer.id, sub.id);
+                              });
+                            }}
+                            className="flex-1 py-1 px-2 bg-gray-800 hover:bg-gray-700 text-gray-300 text-xs rounded transition-colors"
+                          >
+                            Deselect All
+                          </button>
+                        </div>
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
                           {layer.subcategories.map(subcategory => (
                             <label
                               key={subcategory.id}
@@ -278,25 +368,6 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
                   </div>
                 );
               })}
-            </div>
-
-            <div className="mt-4 pt-4 border-t border-gray-700 flex gap-2">
-              <button
-                onClick={() => dataLayers.forEach(layer => {
-                  if (!layer.isActive) onToggleLayer(layer.id);
-                })}
-                className="flex-1 py-1.5 px-2 bg-blue-600 hover:bg-blue-700 text-white text-xs rounded transition-colors"
-              >
-                All
-              </button>
-              <button
-                onClick={() => dataLayers.forEach(layer => {
-                  if (layer.isActive) onToggleLayer(layer.id);
-                })}
-                className="flex-1 py-1.5 px-2 bg-gray-700 hover:bg-gray-600 text-white text-xs rounded transition-colors"
-              >
-                None
-              </button>
             </div>
           </div>
         )}
@@ -403,6 +474,8 @@ export const CombinedPanel: React.FC<CombinedPanelProps> = ({
           </div>
         )}
       </div>
+      </>
+      )}
     </div>
   );
 };

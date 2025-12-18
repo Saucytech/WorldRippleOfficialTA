@@ -1,11 +1,18 @@
 import React, { useEffect, useRef, useState } from 'react';
 import mapboxgl from 'mapbox-gl';
 import 'mapbox-gl/dist/mapbox-gl.css';
+import '../styles/mapMarkers.css';
 import { historyService, HistoricalEvent } from '../services/historyApi';
 import { DataLayer } from '../App';
 import { LayerDataPoint } from '../hooks/useDataCommons';
 import { ACCURATE_BOUNDARIES } from '../utils/countryBoundaries';
 import { Invention } from '../services/inventionsApi';
+import { getEventsForYear, getNearestEvents } from '../services/timelineEvents';
+import { RippleManager, RippleEvent } from './RippleAnimation';
+import { earthquakeService } from '../services/earthquakeApi';
+import { communityService } from '../services/communityService';
+import { layerEventsService, LayerEvent } from '../services/layerEvents';
+import { EventDetailCard } from './EventDetailCard';
 
 interface SearchResult {
   id: string;
@@ -27,6 +34,12 @@ interface MapInterfaceProps {
   dataLoading: boolean;
   searchResult?: SearchResult | null;
   onSearchResultDisplayed?: () => void;
+  onMapReady?: (map: mapboxgl.Map) => void;
+  selectedCategoryEvents?: string | null;
+  onClearCategoryEvents?: () => void;
+  isPanelCollapsed?: boolean;
+  isLeftPanelCollapsed?: boolean;
+  onToggleLeftPanel?: () => void;
 }
 
 // Region definitions with accurate boundaries
@@ -350,13 +363,19 @@ const GEOGRAPHICAL_BOUNDARIES = {
   }
 };
 
-export const MapInterface: React.FC<MapInterfaceProps> = ({
+export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
   dataLayers,
   currentYear,
   realData,
   dataLoading,
   searchResult,
-  onSearchResultDisplayed
+  onSearchResultDisplayed,
+  onMapReady,
+  selectedCategoryEvents,
+  onClearCategoryEvents,
+  isPanelCollapsed = false,
+  isLeftPanelCollapsed = false,
+  onToggleLeftPanel
 }) => {
   const mapContainer = useRef<HTMLDivElement>(null);
   const map = useRef<mapboxgl.Map | null>(null);
@@ -365,45 +384,181 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
   const currentPopups = useRef<mapboxgl.Popup[]>([]);
   const searchMarker = useRef<mapboxgl.Marker | null>(null);
   const eventHandlers = useRef<Map<string, any>>(new Map());
+  const yearMarkers = useRef<mapboxgl.Marker[]>([]);
+  const [rippleEvents, setRippleEvents] = useState<RippleEvent[]>([]);
+  const earthquakeUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+  const communityMarkers = useRef<mapboxgl.Marker[]>([]);
+  const layerEventMarkers = useRef<mapboxgl.Marker[]>([]);
 
-  // Initialize Mapbox
+  // Initialize Mapbox - only once
   useEffect(() => {
-    if (map.current) return;
+    // Double-check to prevent multiple initializations
+    if (map.current || !mapContainer.current) return;
     
     mapboxgl.accessToken = 'pk.eyJ1IjoidG9iaWVhbmRyZXdzIiwiYSI6ImNtZXQwN25vMjA4cTIyam16bGY4N3M0ZWIifQ.EjIqGhcMH_u432HEiu0NIw';
 
-    if (mapContainer.current) {
-      map.current = new mapboxgl.Map({
-        container: mapContainer.current,
-        style: 'mapbox://styles/mapbox/dark-v11',
-        center: [0, 20],
-        zoom: 1.5,
-        attributionControl: false,
-        logoPosition: 'bottom-right'
-      });
+    // Create map instance
+    const mapInstance = new mapboxgl.Map({
+      container: mapContainer.current,
+      style: 'mapbox://styles/mapbox/dark-v11',
+      center: [0, 20],
+      zoom: 1.5,
+      attributionControl: false,
+      logoPosition: 'bottom-right',
+      // Prevent flashing by waiting for style to load
+      fadeDuration: 0
+    });
 
-      map.current.on('load', () => {
-        setMapLoaded(true);
-      });
+    // Store the instance immediately
+    map.current = mapInstance;
 
-      map.current.dragRotate.disable();
-      map.current.touchZoomRotate.disableRotation();
-    }
+    mapInstance.on('load', () => {
+      setMapLoaded(true);
+      if (onMapReady) {
+        onMapReady(mapInstance);
+      }
+    });
+
+    mapInstance.dragRotate.disable();
+    mapInstance.touchZoomRotate.disableRotation();
 
     return () => {
+      if (earthquakeUpdateInterval.current) {
+        clearInterval(earthquakeUpdateInterval.current);
+      }
       if (map.current) {
         map.current.remove();
         map.current = null;
       }
     };
-  }, []);
+  }, [onMapReady]);
 
-  // Clean up layers when they become inactive
+  // Store earthquake markers in a ref to avoid re-render issues
+  const earthquakeMarkersRef = useRef<any[]>([]);
+  const earthquakeFetched = useRef(false);
+
+  // Fetch and display live earthquake data - DISABLED TO PREVENT FLASHING
   useEffect(() => {
-    if (!map.current || !mapLoaded) return;
+    // TEMPORARILY DISABLED - Uncomment to enable earthquake data
+    return;
+    
+    /*
+    if (!mapLoaded || !map.current) return;
+    
+    // Prevent multiple fetches
+    if (earthquakeFetched.current) return;
+    earthquakeFetched.current = true;
 
-    const activeLayers = dataLayers.filter(layer => layer.isActive);
-    const activeLayerIds = new Set(activeLayers.map(layer => layer.id));
+    const fetchEarthquakes = async () => {
+      try {
+        const earthquakes = await earthquakeService.getRecentEarthquakes();
+        
+        // Clear existing earthquake markers from ref
+        earthquakeMarkersRef.current.forEach(marker => marker.remove());
+        earthquakeMarkersRef.current = [];
+        
+        const newMarkers: any[] = [];
+        const newRipples: RippleEvent[] = [];
+        
+        earthquakes.slice(0, 10).forEach(eq => {
+          // Create marker for each earthquake
+          const el = document.createElement('div');
+          el.className = 'earthquake-marker';
+          el.style.width = `${Math.max(10, eq.magnitude * 5)}px`;
+          el.style.height = `${Math.max(10, eq.magnitude * 5)}px`;
+          el.style.backgroundColor = earthquakeService.getMagnitudeColor(eq.magnitude);
+          el.style.borderRadius = '50%';
+          el.style.border = '2px solid white';
+          el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
+          el.style.cursor = 'pointer';
+          
+          const marker = new mapboxgl.Marker(el)
+            .setLngLat(eq.coordinates)
+            .setPopup(
+              new mapboxgl.Popup({ offset: 25 })
+                .setHTML(`
+                  <div style="padding: 8px;">
+                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: bold;">
+                      M${eq.magnitude} Earthquake
+                    </h3>
+                    <p style="margin: 0 0 4px 0; font-size: 12px;">${eq.place}</p>
+                    <p style="margin: 0; font-size: 11px; color: #666;">
+                      ${new Date(eq.time).toLocaleString()}
+                    </p>
+                    ${eq.tsunami ? '<p style="margin: 4px 0 0 0; color: red; font-size: 11px;">⚠️ Tsunami Warning</p>' : ''}
+                  </div>
+                `)
+            );
+          
+          if (map.current) {
+            marker.addTo(map.current);
+            newMarkers.push(marker);
+          }
+          
+          // Create ripple effect for significant earthquakes
+          if (eq.magnitude >= 4.5) {
+            newRipples.push({
+              id: `earthquake-${eq.id}`,
+              coordinates: eq.coordinates,
+              type: 'disaster',
+              magnitude: eq.magnitude,
+              timestamp: eq.time,
+              duration: 4000
+            });
+          }
+        });
+        
+        // Store markers in ref instead of state
+        earthquakeMarkersRef.current = newMarkers;
+        
+        // Don't add ripples on every update to avoid overwhelming the display
+        // Only add ripples if this is the first fetch or if it's been a while
+        // This prevents the flashing/spazzing effect
+      } catch (error) {
+        console.error('Failed to fetch earthquake data:', error);
+      }
+    };
+
+    // Fetch immediately
+    fetchEarthquakes();
+    
+    // Update every 5 minutes
+    earthquakeUpdateInterval.current = setInterval(fetchEarthquakes, 5 * 60 * 1000);
+    
+    return () => {
+      if (earthquakeUpdateInterval.current) {
+        clearInterval(earthquakeUpdateInterval.current);
+      }
+      earthquakeMarkersRef.current.forEach(marker => marker.remove());
+      earthquakeMarkersRef.current = [];
+    };
+    */
+  }, [mapLoaded]);
+
+  // Add data layers to map - DISABLED to prevent visual pulsing
+  // We're now using event markers instead of regional fills
+  useEffect(() => {
+    // Skip adding fill layers - we're using event markers instead
+    return;
+    
+    /* ORIGINAL FILL LAYER CODE - DISABLED
+    if (!map.current || !mapLoaded) return;
+    
+    // CRITICAL: Wait for map style to be fully loaded
+    const addLayersWhenReady = () => {
+      if (!map.current || !map.current.isStyleLoaded()) {
+        // Style not ready, wait a bit and retry
+        setTimeout(addLayersWhenReady, 100);
+        return;
+      }
+      
+      // Prevent any action if no layers are active (initial state)
+      const activeLayers = dataLayers.filter(layer => layer.isActive);
+      if (activeLayers.length === 0 && layersAdded.size === 0) {
+        return; // Nothing to do
+      }
+
+      const activeLayerIds = new Set(activeLayers.map(layer => layer.id));
     
     // Remove layers that are no longer active
     layersAdded.forEach(layerId => {
@@ -445,14 +600,8 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
 
     // Update the set of added layers
     setLayersAdded(activeLayerIds);
-  }, [dataLayers, mapLoaded]);
-
-  // Add/update active layers with real geographical boundaries
-  useEffect(() => {
-    if (!map.current || !mapLoaded) return;
-
-    const activeLayers = dataLayers.filter(layer => layer.isActive);
     
+    // Now add the active layers
     activeLayers.forEach(layer => {
       const sourceId = `${layer.id}-source`;
       const mainLayerId = `${layer.id}-layer`;
@@ -662,7 +811,767 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
         console.warn(`Error adding layer ${layer.id}:`, error);
       }
     });
+    }
+    
+    // Start the process
+    addLayersWhenReady();
+    */
   }, [dataLayers, mapLoaded, currentYear, realData]);
+
+  // Display community insights markers
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    // Check if community layer is active
+    const communityLayer = dataLayers.find(layer => layer.id === 'community');
+    
+    if (communityLayer?.isActive) {
+      // Clear existing community markers
+      communityMarkers.current.forEach(marker => marker.remove());
+      communityMarkers.current = [];
+
+      // Get community contributions with coordinates
+      const contributions = communityService.getContributionsWithCoordinates();
+
+      // Create markers for each contribution
+      contributions.forEach(contribution => {
+        if (!contribution.coordinates) return;
+
+        // Create custom marker element
+        const el = document.createElement('div');
+        el.className = 'community-marker';
+        
+        // Style based on contribution type
+        const typeColors = {
+          story: '#A855F7',
+          data: '#3B82F6',
+          insight: '#10B981',
+          question: '#F59E0B'
+        };
+        
+        el.style.cssText = `
+          width: 32px;
+          height: 32px;
+          background: ${typeColors[contribution.type] || '#22C55E'};
+          border: 2px solid white;
+          border-radius: 50%;
+          cursor: pointer;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          transition: transform 0.2s;
+        `;
+        
+        // Add icon based on type
+        const icons = {
+          story: '📖',
+          data: '📊',
+          insight: '💡',
+          question: '❓'
+        };
+        el.innerHTML = `<span style="font-size: 16px;">${icons[contribution.type]}</span>`;
+        
+        // Add hover effect
+        el.onmouseenter = () => {
+          el.style.transform = 'scale(1.2)';
+        };
+        el.onmouseleave = () => {
+          el.style.transform = 'scale(1)';
+        };
+
+        // Create popup
+        const popup = new mapboxgl.Popup({
+          offset: 25,
+          closeButton: true,
+          closeOnClick: false,
+          maxWidth: '350px'
+        })
+        .setHTML(`
+          <div style="
+            padding: 12px;
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+          ">
+            <div style="
+              display: flex;
+              align-items: center;
+              margin-bottom: 8px;
+            ">
+              <span style="
+                background: ${typeColors[contribution.type]};
+                color: white;
+                padding: 2px 8px;
+                border-radius: 4px;
+                font-size: 11px;
+                font-weight: 600;
+                text-transform: uppercase;
+                margin-right: 8px;
+              ">${contribution.type}</span>
+              <span style="
+                color: #10B981;
+                font-size: 12px;
+                display: flex;
+                align-items: center;
+              ">
+                <span style="font-size: 14px; margin-right: 4px;">👍</span>
+                ${contribution.votes}
+              </span>
+            </div>
+            <h3 style="
+              margin: 0 0 8px 0;
+              font-size: 16px;
+              font-weight: 600;
+              color: #111827;
+              line-height: 1.3;
+            ">${contribution.title}</h3>
+            <p style="
+              margin: 0 0 8px 0;
+              font-size: 13px;
+              color: #6B7280;
+              line-height: 1.4;
+            ">${contribution.content.substring(0, 150)}...</p>
+            <div style="
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+              margin-top: 12px;
+              padding-top: 8px;
+              border-top: 1px solid #E5E7EB;
+            ">
+              <span style="
+                font-size: 12px;
+                color: #9CA3AF;
+              ">By ${contribution.author}</span>
+              <span style="
+                font-size: 11px;
+                color: #9CA3AF;
+              ">${contribution.location}</span>
+            </div>
+            <div style="
+              margin-top: 8px;
+              display: flex;
+              flex-wrap: wrap;
+              gap: 4px;
+            ">
+              ${contribution.tags.map(tag => `
+                <span style="
+                  background: #F3F4F6;
+                  color: #6B7280;
+                  padding: 2px 6px;
+                  border-radius: 3px;
+                  font-size: 10px;
+                ">#${tag}</span>
+              `).join('')}
+            </div>
+          </div>
+        `);
+
+        // Create marker
+        const marker = new mapboxgl.Marker(el)
+          .setLngLat(contribution.coordinates)
+          .setPopup(popup)
+          .addTo(map.current!);
+
+        communityMarkers.current.push(marker);
+
+        // Add ripple effect for community insights
+        setRippleEvents(prev => [
+          ...prev.filter(e => !e.id.startsWith('community-')),
+          {
+            id: `community-${contribution.id}`,
+            coordinates: contribution.coordinates,
+            type: 'social',
+            magnitude: Math.min(contribution.votes / 10, 5),
+            timestamp: contribution.timestamp.getTime(),
+            duration: 3000
+          }
+        ]);
+      });
+    } else {
+      // Remove community markers if layer is not active
+      communityMarkers.current.forEach(marker => marker.remove());
+      communityMarkers.current = [];
+      
+      // Remove community ripples
+      setRippleEvents(prev => prev.filter(e => !e.id.startsWith('community-')));
+    }
+  }, [dataLayers, mapLoaded]);
+
+  // Display category events when selected from Data Explorer
+  useEffect(() => {
+    if (!map.current || !mapLoaded || !selectedCategoryEvents) return;
+
+    // Clear existing layer event markers
+    layerEventMarkers.current.forEach(marker => marker.remove());
+    layerEventMarkers.current = [];
+
+    // Get all events for the selected category
+    const categoryEvents = layerEventsService.getEventsByLayers([selectedCategoryEvents]);
+    
+    // Sort events chronologically
+    const sortedEvents = categoryEvents.sort((a, b) => a.year - b.year);
+
+    // Create markers for ALL events in the category
+    sortedEvents.forEach((event, index) => {
+      // Create custom marker element
+      const el = document.createElement('div');
+      el.className = 'layer-event-marker category-event';
+      
+      const layerColor = layerEventsService.getLayerColor(event.layerType);
+      const size = Math.round((25 + (event.magnitude * 3)) * 0.6); // Reduced by 40%
+      
+      // Add number label for chronological order - fixed positioning
+      const numberLabel = document.createElement('div');
+      numberLabel.style.cssText = `
+        position: absolute;
+        top: -6px;
+        right: -6px;
+        width: 16px;
+        height: 16px;
+        background: white;
+        color: ${layerColor};
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 9px;
+        font-weight: bold;
+        border: 2px solid ${layerColor};
+        z-index: 10;
+        pointer-events: none;
+      `;
+      numberLabel.textContent = String(index + 1);
+      
+      el.style.cssText = `
+        width: ${size}px;
+        height: ${size}px;
+        background: ${layerColor};
+        border: 3px solid white;
+        border-radius: 50%;
+        cursor: pointer;
+        box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+        transition: box-shadow 0.3s, border-color 0.3s;
+        position: relative;
+        animation: pulse 2s ease-in-out infinite;
+      `;
+      
+      // Create inner content container to avoid transform issues
+      const innerContent = document.createElement('div');
+      innerContent.style.cssText = `
+        width: 100%;
+        height: 100%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        position: relative;
+      `;
+      
+      innerContent.appendChild(numberLabel);
+      
+      // Add event icon if available
+      if (event.icon) {
+        const icon = document.createElement('span');
+        icon.textContent = event.icon;
+        icon.style.cssText = `
+          font-size: ${size * 0.5}px;
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          filter: grayscale(1) brightness(10);
+        `;
+        innerContent.appendChild(icon);
+      }
+      
+      el.appendChild(innerContent);
+      
+      // Add hover effect - only change shadow and border, NO transform
+      el.addEventListener('mouseenter', () => {
+        el.style.boxShadow = '0 6px 25px rgba(0,0,0,0.6)';
+        el.style.borderColor = '#fbbf24';
+        el.style.borderWidth = '4px';
+      });
+      
+      el.addEventListener('mouseleave', () => {
+        el.style.boxShadow = '0 4px 15px rgba(0,0,0,0.4)';
+        el.style.borderColor = 'white';
+        el.style.borderWidth = '3px';
+      });
+
+      // Create detailed popup - opens on click
+      const popup = new mapboxgl.Popup({
+        offset: [0, -size/2 - 5], // Offset based on marker size
+        className: 'layer-event-popup',
+        maxWidth: '400px',
+        closeButton: true,
+        closeOnClick: false,
+        anchor: 'bottom' // Anchor to bottom of marker
+      }).setHTML(`
+        <div style="padding: 12px; max-width: 350px;">
+          <div style="display: flex; align-items: center; margin-bottom: 10px;">
+            <div style="
+              width: 40px;
+              height: 40px;
+              background: ${layerColor};
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              margin-right: 12px;
+              flex-shrink: 0;
+            ">
+              <span style="font-size: 20px;">${event.icon || '📍'}</span>
+            </div>
+            <div>
+              <h3 style="margin: 0; font-size: 16px; font-weight: bold; color: #fff;">
+                #${index + 1}: ${event.title}
+              </h3>
+              <div style="color: #94a3b8; font-size: 12px; margin-top: 2px;">
+                ${event.date} • Magnitude: ${event.magnitude}/10
+              </div>
+            </div>
+          </div>
+          
+          <p style="margin: 10px 0; font-size: 13px; line-height: 1.5; color: #e2e8f0;">
+            ${event.description}
+          </p>
+          
+          ${event.rippleEffects && event.rippleEffects.length > 0 ? `
+            <div style="margin-top: 12px; padding-top: 12px; border-top: 1px solid #334155;">
+              <h4 style="margin: 0 0 8px 0; font-size: 12px; color: #94a3b8; text-transform: uppercase;">
+                Ripple Effects:
+              </h4>
+              <ul style="margin: 0; padding-left: 20px; font-size: 12px; color: #cbd5e1;">
+                ${event.rippleEffects.slice(0, 3).map(effect => `
+                  <li style="margin: 4px 0;">${effect}</li>
+                `).join('')}
+              </ul>
+            </div>
+          ` : ''}
+        </div>
+      `);
+
+      // Create marker with proper centering
+      const marker = new mapboxgl.Marker({
+        element: el,
+        anchor: 'center' // Center the marker on the coordinates
+      })
+        .setLngLat(event.coordinates)
+        .addTo(map.current!);
+
+      // Add click handler to show popup
+      el.addEventListener('click', (e) => {
+        e.stopPropagation();
+        // Close any other open popups
+        document.querySelectorAll('.mapboxgl-popup').forEach(p => p.remove());
+        // Show this popup
+        popup.setLngLat(event.coordinates).addTo(map.current!);
+      });
+
+      layerEventMarkers.current.push(marker);
+    });
+
+    // Fit map to show all markers with proper centering
+    if (sortedEvents.length > 0) {
+      const bounds = new mapboxgl.LngLatBounds();
+      sortedEvents.forEach(event => {
+        bounds.extend(event.coordinates);
+      });
+      
+      // Account for both panels
+      const leftPadding = isLeftPanelCollapsed ? 100 : 450;
+      const rightPadding = isPanelCollapsed ? 100 : 350;
+      map.current.fitBounds(bounds, {
+        padding: { top: 100, bottom: 100, left: leftPadding, right: rightPadding },
+        duration: 1500,
+        maxZoom: 5
+      });
+    }
+
+    // Add initial ripple effect for the entire category
+    setRippleEvents([{
+      id: `category-${selectedCategoryEvents}`,
+      coordinates: sortedEvents[0]?.coordinates || [0, 0],
+      type: selectedCategoryEvents as any,
+      magnitude: 5,
+      timestamp: Date.now(),
+      duration: 3000
+    }]);
+
+  }, [selectedCategoryEvents, mapLoaded, isPanelCollapsed, isLeftPanelCollapsed]);
+
+  // Resize map when panels collapse/expand
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+    
+    // Wait for CSS transition to complete
+    setTimeout(() => {
+      map.current?.resize();
+      
+      // If we have category events selected, refit bounds
+      if (selectedCategoryEvents) {
+        const categoryEvents = layerEventsService.getEventsByLayers([selectedCategoryEvents]);
+        const sortedEvents = categoryEvents.sort((a, b) => a.year - b.year);
+        
+        if (sortedEvents.length > 0) {
+          const bounds = new mapboxgl.LngLatBounds();
+          sortedEvents.forEach(event => {
+            bounds.extend(event.coordinates);
+          });
+          
+          // Adjust padding based on panel states
+          const leftPadding = isLeftPanelCollapsed ? 100 : 450;
+          const rightPadding = isPanelCollapsed ? 100 : 350;
+          map.current.fitBounds(bounds, {
+            padding: { top: 100, bottom: 100, left: leftPadding, right: rightPadding },
+            duration: 500,
+            maxZoom: 5
+          });
+        }
+      }
+    }, 300); // Match CSS transition duration
+  }, [isPanelCollapsed, isLeftPanelCollapsed, mapLoaded, selectedCategoryEvents]);
+
+  // Display layer-specific historical events
+  useEffect(() => {
+    if (!map.current || !mapLoaded || selectedCategoryEvents) return; // Skip if category events are selected
+
+    // Clear existing layer event markers
+    layerEventMarkers.current.forEach(marker => marker.remove());
+    layerEventMarkers.current = [];
+
+    // Get active layers (excluding community which has its own handler)
+    const activeLayers = dataLayers
+      .filter(layer => layer.isActive && layer.id !== 'community')
+      .map(layer => layer.id);
+
+    if (activeLayers.length === 0) {
+      // Remove layer event ripples if no layers active
+      setRippleEvents(prev => prev.filter(e => !e.id.startsWith('layer-event-')));
+      return;
+    }
+
+    // Get events for active layers within current year range
+    const events = layerEventsService.getEventsByLayers(activeLayers);
+    
+    // Filter events by current year (show events within 50 years of current year for visibility)
+    const yearRange = 50;
+    const visibleEvents = events.filter(event => 
+      Math.abs(event.year - currentYear) <= yearRange
+    );
+
+    // Create markers for each visible event
+    visibleEvents.forEach(event => {
+      // Create custom marker element
+      const el = document.createElement('div');
+      el.className = 'layer-event-marker';
+      
+      const layerColor = layerEventsService.getLayerColor(event.layerType);
+      
+      // Style based on magnitude and proximity to current year
+      const yearDiff = Math.abs(event.year - currentYear);
+      const opacity = Math.max(0.4, 1 - (yearDiff / yearRange) * 0.5);
+      const size = 20 + (event.magnitude * 3);
+      
+      el.style.cssText = `
+        width: ${size}px;
+        height: ${size}px;
+        background: ${layerColor};
+        border: 3px solid white;
+        border-radius: 50%;
+        cursor: pointer;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
+        opacity: ${opacity};
+        transition: all 0.3s;
+        position: relative;
+      `;
+      
+      // Add pulse animation for events in current year
+      if (event.year === currentYear) {
+        el.style.animation = 'pulse 2s infinite';
+        el.innerHTML = `
+          <span style="font-size: ${size * 0.5}px;">${event.icon || '📍'}</span>
+          <div style="
+            position: absolute;
+            width: ${size * 2}px;
+            height: ${size * 2}px;
+            border: 2px solid ${layerColor};
+            border-radius: 50%;
+            animation: ripple 2s linear infinite;
+            opacity: 0.5;
+          "></div>
+        `;
+      } else {
+        el.innerHTML = `<span style="font-size: ${size * 0.4}px;">${event.icon || '📍'}</span>`;
+      }
+      
+      // Add hover effect
+      el.onmouseenter = () => {
+        el.style.transform = 'scale(1.3)';
+        el.style.zIndex = '1000';
+      };
+      el.onmouseleave = () => {
+        el.style.transform = 'scale(1)';
+        el.style.zIndex = 'auto';
+      };
+
+      // Create detailed popup
+      const popup = new mapboxgl.Popup({
+        offset: 25,
+        closeButton: true,
+        closeOnClick: false,
+        maxWidth: '400px',
+        className: 'layer-event-popup'
+      })
+      .setHTML(`
+        <div style="
+          padding: 16px;
+          font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        ">
+          <div style="
+            display: flex;
+            align-items: center;
+            margin-bottom: 12px;
+          ">
+            <span style="
+              background: ${layerColor};
+              color: white;
+              padding: 4px 10px;
+              border-radius: 6px;
+              font-size: 12px;
+              font-weight: 600;
+              text-transform: uppercase;
+              margin-right: 10px;
+            ">${event.layerType}</span>
+            <span style="
+              background: ${event.magnitude >= 9 ? '#EF4444' : event.magnitude >= 7 ? '#F59E0B' : '#10B981'};
+              color: white;
+              padding: 4px 8px;
+              border-radius: 4px;
+              font-size: 11px;
+              font-weight: 500;
+            ">Impact: ${event.magnitude}/10</span>
+          </div>
+          
+          <h3 style="
+            margin: 0 0 8px 0;
+            font-size: 20px;
+            font-weight: 700;
+            color: #111827;
+            line-height: 1.2;
+          ">${event.icon} ${event.title}</h3>
+          
+          <div style="
+            font-size: 14px;
+            color: #6B7280;
+            margin-bottom: 12px;
+          ">
+            <strong>${event.date}</strong> • Year ${event.year}
+          </div>
+          
+          <p style="
+            margin: 0 0 16px 0;
+            font-size: 14px;
+            color: #374151;
+            line-height: 1.5;
+          ">${event.description}</p>
+          
+          <div style="
+            border-top: 1px solid #E5E7EB;
+            padding-top: 12px;
+            margin-bottom: 12px;
+          ">
+            <h4 style="
+              margin: 0 0 8px 0;
+              font-size: 13px;
+              font-weight: 600;
+              color: #111827;
+            ">Ripple Effects:</h4>
+            <ul style="
+              margin: 0;
+              padding: 0;
+              list-style: none;
+            ">
+              ${event.rippleEffects.slice(0, 3).map(effect => `
+                <li style="
+                  font-size: 12px;
+                  color: #6B7280;
+                  padding: 4px 0;
+                  padding-left: 16px;
+                  position: relative;
+                ">
+                  <span style="
+                    position: absolute;
+                    left: 0;
+                    top: 8px;
+                    width: 4px;
+                    height: 4px;
+                    background: ${layerColor};
+                    border-radius: 50%;
+                  "></span>
+                  ${effect}
+                </li>
+              `).join('')}
+            </ul>
+            ${event.rippleEffects.length > 3 ? `
+              <p style="
+                font-size: 11px;
+                color: #9CA3AF;
+                margin: 8px 0 0 0;
+                font-style: italic;
+              ">+${event.rippleEffects.length - 3} more effects...</p>
+            ` : ''}
+          </div>
+          
+          <div style="
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            font-size: 11px;
+            color: #9CA3AF;
+          ">
+            <span>📍 ${event.coordinates[1].toFixed(2)}°, ${event.coordinates[0].toFixed(2)}°</span>
+            <span style="
+              background: #F3F4F6;
+              padding: 2px 6px;
+              border-radius: 3px;
+            ">${event.year < 0 ? Math.abs(event.year) + ' BCE' : event.year + ' CE'}</span>
+          </div>
+        </div>
+      `);
+
+      // Create marker
+      const marker = new mapboxgl.Marker(el)
+        .setLngLat(event.coordinates)
+        .setPopup(popup)
+        .addTo(map.current!);
+
+      layerEventMarkers.current.push(marker);
+
+      // Add ripple effect for significant events
+      if (event.year === currentYear || (Math.abs(event.year - currentYear) <= 5 && event.magnitude >= 8)) {
+        setRippleEvents(prev => {
+          const filtered = prev.filter(e => !e.id.startsWith(`layer-event-${event.id}`));
+          return [...filtered, {
+            id: `layer-event-${event.id}`,
+            coordinates: event.coordinates,
+            type: event.layerType as any,
+            magnitude: event.magnitude / 2,
+            timestamp: Date.now(),
+            duration: 5000
+          }];
+        });
+      }
+    });
+  }, [dataLayers, mapLoaded, currentYear]);
+
+  // Display event markers for current year
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    // Clear existing year markers
+    if (yearMarkers.current) {
+      yearMarkers.current.forEach(marker => marker.remove());
+      yearMarkers.current = [];
+    }
+
+    // Get events for current year
+    const currentYearEvents = getEventsForYear(currentYear);
+    const nearbyEvents = getNearestEvents(currentYear, 10);
+    
+    // Combine and deduplicate
+    const eventsToShow = [...currentYearEvents];
+    nearbyEvents.forEach(event => {
+      if (!eventsToShow.find(e => e.year === event.year && e.label === event.label)) {
+        eventsToShow.push(event);
+      }
+    });
+
+    // Create markers for each event with coordinates
+    eventsToShow.forEach(event => {
+      if (event.coordinates) {
+        // Create custom marker element
+        const el = document.createElement('div');
+        el.className = 'timeline-event-marker';
+        const isCurrentYear = event.year === currentYear;
+        const baseSize = isCurrentYear ? 20 : 12;
+        
+        // Simple styles without any transforms or position changes
+        el.style.cssText = `
+          width: ${baseSize}px;
+          height: ${baseSize}px;
+          background: ${event.color};
+          border: 2px solid white;
+          border-radius: 50%;
+          cursor: pointer;
+          box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+          transition: box-shadow 0.2s, border-color 0.2s, background 0.2s;
+        `;
+        
+        // Simple hover effect - only change colors/shadows, no size/position changes
+        el.addEventListener('mouseenter', () => {
+          el.style.boxShadow = '0 4px 16px rgba(0,0,0,0.6)';
+          el.style.borderColor = '#f0f0f0';
+          // Slightly brighten the background
+          el.style.filter = 'brightness(1.2)';
+        });
+        
+        el.addEventListener('mouseleave', () => {
+          el.style.boxShadow = '0 2px 8px rgba(0,0,0,0.3)';
+          el.style.borderColor = 'white';
+          el.style.filter = 'brightness(1)';
+        });
+
+        // Create marker
+        const marker = new mapboxgl.Marker(el)
+          .setLngLat(event.coordinates)
+          .setPopup(
+            new mapboxgl.Popup({ offset: 25 })
+              .setHTML(`
+                <div style="
+                  padding: 12px;
+                  max-width: 250px;
+                ">
+                  <div style="
+                    font-size: 11px;
+                    color: ${event.color};
+                    text-transform: uppercase;
+                    letter-spacing: 0.5px;
+                    margin-bottom: 4px;
+                    font-weight: 600;
+                  ">${event.type} • ${event.year}</div>
+                  <div style="
+                    font-size: 14px;
+                    font-weight: 600;
+                    margin-bottom: 6px;
+                  ">${event.label}</div>
+                  ${event.description ? `
+                    <div style="
+                      font-size: 12px;
+                      color: #666;
+                      line-height: 1.4;
+                    ">${event.description}</div>
+                  ` : ''}
+                  ${event.location ? `
+                    <div style="
+                      font-size: 11px;
+                      color: #999;
+                      margin-top: 6px;
+                      padding-top: 6px;
+                      border-top: 1px solid #eee;
+                    ">📍 ${event.location}</div>
+                  ` : ''}
+                </div>
+              `)
+          )
+          .addTo(map.current);
+
+        yearMarkers.current.push(marker);
+      }
+    });
+  }, [currentYear, mapLoaded]);
 
   // Handle search result display
   useEffect(() => {
@@ -687,6 +1596,19 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
 
     let coordinates: [number, number] | undefined;
     let popupContent = '';
+
+    // Trigger ripple effect for events
+    const triggerEventRipple = (coords: [number, number], type: RippleEvent['type'] = 'social') => {
+      const ripple: RippleEvent = {
+        id: `search-${Date.now()}`,
+        coordinates: coords,
+        type: type,
+        magnitude: 5,
+        timestamp: Date.now(),
+        duration: 3000
+      };
+      setRippleEvents(prev => [...prev, ripple]);
+    };
 
     if (searchResult.type === 'event' && searchResult.historicalEvent) {
       const event = searchResult.historicalEvent;
@@ -924,6 +1846,24 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
         .setLngLat(coordinates)
         .addTo(map.current);
 
+      // Trigger ripple effect based on search result type
+      let rippleType: RippleEvent['type'] = 'social';
+      if (searchResult.type === 'event') {
+        // Determine event type from description
+        const desc = searchResult.description.toLowerCase();
+        if (desc.includes('war') || desc.includes('battle')) rippleType = 'war';
+        else if (desc.includes('disease') || desc.includes('pandemic')) rippleType = 'pandemic';
+        else if (desc.includes('invention') || desc.includes('innovation')) rippleType = 'invention';
+        else if (desc.includes('economic') || desc.includes('market')) rippleType = 'economic';
+        else if (desc.includes('disaster') || desc.includes('earthquake')) rippleType = 'disaster';
+      } else if (searchResult.type === 'invention') {
+        rippleType = 'invention';
+      } else if (searchResult.type === 'person') {
+        rippleType = 'social';
+      }
+      
+      triggerEventRipple(coordinates, rippleType);
+
       // Create and show popup
       const popup = new mapboxgl.Popup({
         closeButton: true,
@@ -1041,12 +1981,52 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
       if (searchMarker.current) {
         searchMarker.current.remove();
       }
+
+      // Remove year markers
+      if (yearMarkers.current) {
+        yearMarkers.current.forEach(marker => marker.remove());
+        yearMarkers.current = [];
+      }
     };
   }, []);
 
   return (
     <div className="w-full h-full relative overflow-hidden">
-      <div ref={mapContainer} className="absolute inset-0" />
+      {/* Map container - always rendered to prevent flashing */}
+      <div 
+        ref={mapContainer} 
+        className="absolute inset-0"
+        style={{ 
+          // Ensure the container is always visible
+          visibility: 'visible',
+          // Prevent any transitions that might cause flashing
+          transition: 'none'
+        }} 
+      />
+      
+      {/* Ripple animations overlay - only render when map is loaded */}
+      {mapLoaded && <RippleManager events={rippleEvents} map={map.current} />}
+
+      {/* Event Detail Card - shows when a category is selected */}
+      {selectedCategoryEvents && onClearCategoryEvents && (
+        <EventDetailCard 
+          categoryId={selectedCategoryEvents}
+          onClose={onClearCategoryEvents}
+          isCollapsed={isLeftPanelCollapsed}
+          onToggleCollapse={onToggleLeftPanel}
+          onEventClick={(event) => {
+            // Focus on the clicked event
+            if (map.current && event.coordinates) {
+              map.current.flyTo({
+                center: event.coordinates,
+                zoom: 6,
+                duration: 1500,
+                essential: true
+              });
+            }
+          }}
+        />
+      )}
 
       {dataLoading && (
         <div className="absolute top-20 left-6 bg-black/70 backdrop-blur-sm px-4 py-2 rounded-lg border border-gray-700 z-10">
@@ -1099,4 +2079,17 @@ export const MapInterface: React.FC<MapInterfaceProps> = ({
       </div>
     </div>
   );
-};
+}, (prevProps, nextProps) => {
+  // Custom comparison to prevent unnecessary re-renders
+  // Only re-render if specific props have actually changed
+  return (
+    prevProps.currentYear === nextProps.currentYear &&
+    prevProps.dataLoading === nextProps.dataLoading &&
+    prevProps.searchResult === nextProps.searchResult &&
+    prevProps.selectedCategoryEvents === nextProps.selectedCategoryEvents &&
+    prevProps.isPanelCollapsed === nextProps.isPanelCollapsed &&
+    prevProps.isLeftPanelCollapsed === nextProps.isLeftPanelCollapsed &&
+    JSON.stringify(prevProps.dataLayers) === JSON.stringify(nextProps.dataLayers) &&
+    prevProps.realData === nextProps.realData
+  );
+});

@@ -1,0 +1,175 @@
+/* Ripple Animation Styles */
+
+.ripple-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  z-index: 100;
+  will-change: transform;
+  transform: translateZ(0); /* Force GPU acceleration */
+}
+
+.ripple-container {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.ripple-wave {
+  position: absolute;
+  border-radius: 50%;
+  border: 2px solid var(--ripple-color, #06B6D4);
+  opacity: 0;
+  animation: ripple-expand 3s ease-out;
+  transform-origin: center;
+  pointer-events: none;
+}
+
+.ripple-wave-1 {
+  animation-delay: 0s;
+}
+
+.ripple-wave-2 {
+  animation-delay: 0.5s;
+}
+
+.ripple-wave-3 {
+  animation-delay: 1s;
+}
+
+@keyframes ripple-expand {
+  0% {
+    width: 20px;
+    height: 20px;
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(1);
+    box-shadow: 0 0 10px var(--ripple-color, #06B6D4);
+  }
+  
+  50% {
+    opacity: 0.3;
+    box-shadow: 0 0 20px var(--ripple-color, #06B6D4);
+  }
+  
+  100% {
+    width: 20px;
+    height: 20px;
+    opacity: 0;
+    transform: translate(-50%, -50%) scale(var(--ripple-scale, 10));
+    box-shadow: 0 0 30px transparent;
+  }
+}
+
+.ripple-center {
+  position: absolute;
+  transform: translate(-50%, -50%);
+  width: 12px;
+  height: 12px;
+  pointer-events: none;
+}
+
+.ripple-pulse {
+  width: 100%;
+  height: 100%;
+  border-radius: 50%;
+  background: var(--ripple-color, #06B6D4);
+  animation: pulse 1.5s ease-in-out infinite;
+  box-shadow: 0 0 20px var(--ripple-color, #06B6D4);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.3);
+    opacity: 0.7;
+  }
+}
+
+/* Special effects for different event types */
+
+/* Pandemic - spreading effect */
+.ripple-container[data-type="pandemic"] .ripple-wave {
+  border-style: dashed;
+  animation-duration: 4s;
+}
+
+/* War - explosive effect */
+.ripple-container[data-type="war"] .ripple-wave {
+  border-width: 3px;
+  animation-timing-function: cubic-bezier(0.68, -0.55, 0.265, 1.55);
+}
+
+/* Innovation - positive radiating effect */
+.ripple-container[data-type="invention"] .ripple-wave {
+  border-style: double;
+  border-width: 3px;
+}
+
+/* Economic - wave pattern */
+.ripple-container[data-type="economic"] .ripple-wave {
+  animation-timing-function: cubic-bezier(0.455, 0.03, 0.515, 0.955);
+  animation-duration: 3.5s;
+}
+
+/* Disaster - chaotic effect */
+.ripple-container[data-type="disaster"] .ripple-wave {
+  animation-timing-function: steps(8, end);
+}
+
+/* Climate - slow spreading */
+.ripple-container[data-type="climate"] .ripple-wave {
+  animation-duration: 5s;
+  border-width: 1px;
+}
+
+/* Social - interconnected effect */
+.ripple-container[data-type="social"] .ripple-wave {
+  border-style: dotted;
+  border-width: 4px;
+  animation-duration: 3s;
+}
+
+/* Magnitude-based modifications */
+.ripple-high-impact .ripple-wave {
+  border-width: 4px !important;
+  animation-duration: 4s !important;
+}
+
+.ripple-medium-impact .ripple-wave {
+  border-width: 2px !important;
+  animation-duration: 3s !important;
+}
+
+.ripple-low-impact .ripple-wave {
+  border-width: 1px !important;
+  animation-duration: 2s !important;
+}
+
+/* Glow effects */
+@keyframes glow {
+  0%, 100% {
+    filter: drop-shadow(0 0 5px var(--ripple-color, #06B6D4));
+  }
+  50% {
+    filter: drop-shadow(0 0 20px var(--ripple-color, #06B6D4));
+  }
+}
+
+.ripple-container.active-event {
+  animation: glow 2s ease-in-out infinite;
+}
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  @keyframes ripple-expand {
+    100% {
+      transform: translate(-50%, -50%) scale(calc(var(--ripple-scale, 10) * 0.7));
+    }
+  }
+}

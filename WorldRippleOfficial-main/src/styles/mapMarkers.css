@@ -1,0 +1,69 @@
+/* Map Marker Styles - Safe hover effects only */
+.timeline-event-marker {
+  /* No transforms or position changes on hover */
+  pointer-events: auto;
+}
+
+/* Mapbox marker wrapper - don't interfere with positioning */
+.mapboxgl-marker {
+  pointer-events: auto;
+}
+
+/* Ensure markers stay in place */
+.mapboxgl-marker > .timeline-event-marker {
+  /* No transform rules that could interfere */
+  position: relative;
+}
+
+/* Smooth transitions for safe properties only */
+.timeline-event-marker {
+  will-change: box-shadow, border-color, filter;
+}
+
+/* Category event markers animation - no transform to prevent position shifts */
+@keyframes pulse {
+  0% {
+    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+  }
+  50% {
+    box-shadow: 0 4px 25px rgba(0,0,0,0.6), 0 0 30px currentColor;
+  }
+  100% {
+    box-shadow: 0 4px 15px rgba(0,0,0,0.4);
+  }
+}
+
+.layer-event-marker {
+  /* Ensure markers stay in position */
+  position: relative !important;
+  pointer-events: auto !important;
+}
+
+.layer-event-marker.category-event {
+  animation: pulse 2s ease-in-out infinite;
+  z-index: 100;
+}
+
+.layer-event-marker.category-event:hover {
+  animation: none;
+  z-index: 101;
+}
+
+/* Mapbox marker centering - let Mapbox handle positioning */
+.mapboxgl-marker {
+  pointer-events: auto !important;
+}
+
+/* Event popup styling */
+.layer-event-popup .mapboxgl-popup-content {
+  background: #1f2937;
+  border: 1px solid #374151;
+  color: white;
+  padding: 0;
+  border-radius: 12px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.5);
+}
+
+.layer-event-popup .mapboxgl-popup-tip {
+  border-top-color: #1f2937;
+}

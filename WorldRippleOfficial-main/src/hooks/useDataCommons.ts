@@ -117,6 +117,10 @@ export function useMultiLayerData(activeLayers: string[], currentYear: number) {
 
               // Check if this is a Census API source
               if (source.entity.startsWith('census-')) {
+                // TEMPORARILY DISABLED: Census API requires Supabase configuration
+                // Skipping Census data to avoid console spam
+                continue;
+                /*
                 const stateName = source.entity.replace('census-', '');
                 const variableCode = CENSUS_VARIABLES[source.variable as keyof typeof CENSUS_VARIABLES];
                 console.log(`[Census] Fetching ${source.variable} for ${stateName}, year ${currentYear}`);
@@ -147,6 +151,7 @@ export function useMultiLayerData(activeLayers: string[], currentYear: number) {
                 } else {
                   console.warn(`No Census variable code found for: ${source.variable}`);
                 }
+                */
 
                 if (currentValue !== null && !isNaN(currentValue)) {
                   allValues.push(currentValue);

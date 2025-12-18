@@ -4,12 +4,15 @@ import { Header } from './components/Header';
 import { MapInterface } from './components/MapInterface';
 import { CombinedPanel } from './components/CombinedPanel';
 import { TimelineControls } from './components/TimelineControls';
+import { TimeLapseControls } from './components/TimeLapseControls';
 import { CommunityPanel } from './components/CommunityPanel';
 import { UserDashboard } from './components/UserDashboard';
 import { AuthScreen } from './components/AuthScreen';
 import { Invention, getAllInventions } from './services/inventionsApi';
 import { historyService } from './services/historyApi';
 import { supabase } from './lib/supabase';
+import { ApiTestPanel } from './components/ApiTestPanel';
+import mapboxgl from 'mapbox-gl';
 
 interface SearchResult {
   id: string;
@@ -50,8 +53,18 @@ function App() {
   const [selectedSearchResult, setSelectedSearchResult] = useState<SearchResult | null>(null);
   const [selectedInvention, setSelectedInvention] = useState<Invention | null>(null);
   const [detailViewResult, setDetailViewResult] = useState<SearchResult | null>(null);
+  const [mapRef, setMapRef] = useState<mapboxgl.Map | null>(null);
+  const [showTimeLapse, setShowTimeLapse] = useState(false);
+  const [selectedCategoryEvents, setSelectedCategoryEvents] = useState<string | null>(null);
+  const [isPanelCollapsed, setIsPanelCollapsed] = useState(false);
+  const [isLeftPanelCollapsed, setIsLeftPanelCollapsed] = useState(false);
 
   useEffect(() => {
+    // TEMPORARY: Bypass auth for local testing
+    // Uncomment the code below to enable real authentication
+    setIsAuthenticated(true); // Bypass auth for testing
+    
+    /* REAL AUTH CODE - Uncomment when Supabase is configured:
     supabase.auth.getSession().then(({ data: { session } }) => {
       setIsAuthenticated(!!session);
     });
@@ -61,6 +74,7 @@ function App() {
     });
 
     return () => subscription.unsubscribe();
+    */
   }, []);
   const [dataLayers, setDataLayers] = useState<DataLayer[]>([
     {
@@ -91,7 +105,7 @@ function App() {
       id: 'disease',
       name: 'Health',
       color: '#EF4444',
-      isActive: true,
+      isActive: false,  // Start inactive to prevent flashing
       intensity: 0.7,
       description: 'Tracking infectious disease patterns and outbreaks across regions',
       isExpanded: false,
@@ -122,7 +136,7 @@ function App() {
       id: 'housing',
       name: 'Housing',
       color: '#EAB308',
-      isActive: true,
+      isActive: false,  // Start inactive to prevent flashing
       intensity: 0.8,
       description: 'Housing affordability and availability trends',
       isExpanded: false,
@@ -261,6 +275,21 @@ function App() {
         { id: 'human-trafficking', name: 'Human Trafficking / Kidnapping', isActive: false },
         { id: 'crime-justice', name: 'Crime & Justice Trends', isActive: false }
       ]
+    },
+    {
+      id: 'community',
+      name: 'Community Insights',
+      color: '#22C55E',
+      isActive: false,
+      intensity: 0.8,
+      description: 'Crowdsourced insights and stories from the WorldRipple community',
+      isExpanded: false,
+      subcategories: [
+        { id: 'community-stories', name: 'Personal Stories', isActive: false },
+        { id: 'community-data', name: 'Contributed Data', isActive: false },
+        { id: 'community-insights', name: 'Local Insights', isActive: false },
+        { id: 'community-questions', name: 'Research Questions', isActive: false }
+      ]
     }
   ]);
 
@@ -379,6 +408,17 @@ function App() {
     }
   };
 
+  const handleShowCategoryEvents = (categoryId: string) => {
+    console.log('Showing events for category:', categoryId);
+    setSelectedCategoryEvents(categoryId);
+    // Auto-collapse panel to give more room for the map
+    setIsPanelCollapsed(true);
+  };
+
+  const handleClearCategoryEvents = () => {
+    setSelectedCategoryEvents(null);
+  };
+
   const handleRandomize = () => {
     console.log('Randomize clicked!');
     const allInventions = getAllInventions();
@@ -464,8 +504,8 @@ function App() {
       />
       
       <div className="flex h-screen pt-16">
-        {/* Main Map Area */}
-        <div className="flex-1 relative">
+        {/* Main Map Area - takes full width when panel is collapsed */}
+        <div className={`flex-1 relative transition-all duration-300 ${isPanelCollapsed ? 'w-full' : ''}`}>
           <MapInterface
             dataLayers={dataLayers}
             currentYear={currentYear}
@@ -473,40 +513,128 @@ function App() {
             dataLoading={dataLoading}
             searchResult={selectedSearchResult}
             onSearchResultDisplayed={() => setSelectedSearchResult(null)}
+            onMapReady={(map) => setMapRef(map)}
+            selectedCategoryEvents={selectedCategoryEvents}
+            onClearCategoryEvents={handleClearCategoryEvents}
+            isPanelCollapsed={isPanelCollapsed}
+            isLeftPanelCollapsed={isLeftPanelCollapsed}
+            onToggleLeftPanel={() => setIsLeftPanelCollapsed(!isLeftPanelCollapsed)}
           />
 
-          {/* Timeline Controls */}
+          {/* Timeline Controls with Toggle */}
           <div className="absolute bottom-6 left-6">
-            <TimelineControls
-              currentYear={currentYear}
-              onYearChange={setCurrentYear}
-            />
+            <div className="flex flex-col gap-2">
+              {/* Toggle Button */}
+              <button
+                onClick={() => setShowTimeLapse(!showTimeLapse)}
+                className="self-start px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-lg text-sm font-medium transition-colors flex items-center gap-2"
+              >
+                {showTimeLapse ? (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Switch to Timeline
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                    Time-Lapse Mode
+                  </>
+                )}
+              </button>
+              
+              {/* Show appropriate control based on mode */}
+              {showTimeLapse ? (
+                <TimeLapseControls
+                  currentYear={currentYear}
+                  onYearChange={setCurrentYear}
+                  activeLayers={dataLayers.filter(l => l.isActive).map(l => l.id)}
+                />
+              ) : (
+                <TimelineControls
+                  currentYear={currentYear}
+                  onYearChange={setCurrentYear}
+                  onEventFocus={(coordinates, eventData) => {
+                    // Focus map on the event location
+                    if (mapRef && coordinates) {
+                      mapRef.flyTo({
+                        center: coordinates,
+                        zoom: 6,
+                        duration: 2000,
+                        essential: true
+                      });
+                      
+                      // Set as search result to show marker
+                      setSelectedSearchResult({
+                        id: `event-${eventData.year}`,
+                        title: eventData.label,
+                        type: 'event',
+                        description: eventData.description || '',
+                        coordinates: coordinates,
+                        year: eventData.year,
+                        timestamp: Date.now()
+                      });
+                    }
+                  }}
+                />
+              )}
+            </div>
           </div>
         </div>
 
-        {/* Right Side Panel */}
-        <div className="w-80">
-          {activePanel === 'community' ? (
-            <CommunityPanel />
-          ) : activePanel === 'dashboard' ? (
-            <UserDashboard key={dashboardTab} defaultTab={dashboardTab} />
-          ) : (
-            <CombinedPanel
-              dataLayers={dataLayers}
-              onToggleLayer={toggleDataLayer}
-              onUpdateIntensity={updateLayerIntensity}
-              onToggleExpansion={toggleLayerExpansion}
-              onToggleSubcategory={toggleSubcategory}
-              realData={allLayerData}
-              currentYear={currentYear}
-              invention={selectedInvention}
-              onCloseInvention={handleCloseInvention}
-              searchResult={detailViewResult}
-              onCloseSearchResult={handleCloseDetailView}
-            />
-          )}
+        {/* Collapse/Expand Button - attached to the panel */}
+        <button
+          onClick={() => setIsPanelCollapsed(!isPanelCollapsed)}
+          className={`fixed ${isPanelCollapsed ? 'right-0' : 'right-80'} top-24 z-50 p-2 bg-gray-800 hover:bg-gray-700 text-white ${isPanelCollapsed ? 'rounded-l-lg' : 'rounded-l-lg -mr-[1px]'} transition-all duration-300 border border-r-0 border-gray-600 shadow-lg`}
+          title={isPanelCollapsed ? 'Show Panel' : 'Hide Panel'}
+        >
+          <svg
+            className="w-5 h-5"
+            fill="none"
+            stroke="currentColor"
+            viewBox="0 0 24 24"
+          >
+            {isPanelCollapsed ? (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
+            ) : (
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+            )}
+          </svg>
+        </button>
+
+        {/* Right Side Panel - Collapsible */}
+        <div className={`${isPanelCollapsed ? 'w-0' : 'w-80'} transition-all duration-300 overflow-hidden`}>
+          <div className="w-80">
+            {activePanel === 'community' ? (
+              <CommunityPanel />
+            ) : activePanel === 'dashboard' ? (
+              <UserDashboard key={dashboardTab} defaultTab={dashboardTab} />
+            ) : (
+              <CombinedPanel
+                dataLayers={dataLayers}
+                onToggleLayer={toggleDataLayer}
+                onUpdateIntensity={updateLayerIntensity}
+                onToggleExpansion={toggleLayerExpansion}
+                onToggleSubcategory={toggleSubcategory}
+                realData={allLayerData}
+                currentYear={currentYear}
+                invention={selectedInvention}
+                onCloseInvention={handleCloseInvention}
+                searchResult={detailViewResult}
+                onCloseSearchResult={handleCloseDetailView}
+                onShowCategoryEvents={handleShowCategoryEvents}
+              />
+            )}
+          </div>
         </div>
       </div>
+
+      {/* API Test Panel - Remove this after testing */}
+      <ApiTestPanel />
     </div>
   );
 }
