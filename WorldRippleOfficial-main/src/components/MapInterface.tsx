@@ -404,6 +404,7 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       center: [0, 20],
       zoom: 1.5,
       attributionControl: false,
+      projection: 'globe', // Use beautiful globe projection
       logoPosition: 'bottom-right',
       // Prevent flashing by waiting for style to load
       fadeDuration: 0
@@ -413,10 +414,43 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
     map.current = mapInstance;
 
     mapInstance.on('load', () => {
+      // Configure beautiful globe with blue universe/stars atmosphere
+      mapInstance.setFog({
+        'range': [0.8, 8],
+        'color': '#0a0e27', // Deep blue space color
+        'high-color': '#1c2951', // Lighter blue for atmosphere
+        'space-color': '#0a0e27', // Deep space background
+        'horizon-blend': 0.1,
+        'star-intensity': 0.8 // Add beautiful stars
+      });
+      
+      // Add atmosphere effect for beautiful blue glow
+      mapInstance.setPaintProperty('sky', 'sky-atmosphere-sun', [0, 90]);
+      mapInstance.setPaintProperty('sky', 'sky-atmosphere-color', '#4a90e2');
+      
       setMapLoaded(true);
       if (onMapReady) {
         onMapReady(mapInstance);
       }
+    });
+
+    // Add zoom event handlers to stabilize markers
+    mapInstance.on('zoomstart', () => {
+      // Force all markers to stay locked to their coordinates during zoom
+      layerEventMarkers.current.forEach(marker => {
+        const lngLat = marker.getLngLat();
+        marker.setLngLat(lngLat); // Force reposition
+      });
+    });
+
+    mapInstance.on('zoomend', () => {
+      // Force all markers to reposition after zoom completes
+      setTimeout(() => {
+        layerEventMarkers.current.forEach(marker => {
+          const lngLat = marker.getLngLat();
+          marker.setLngLat(lngLat); // Force reposition
+        });
+      }, 50); // Small delay to ensure zoom animation is complete
     });
 
     mapInstance.dragRotate.disable();
@@ -472,7 +506,11 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
           el.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
           el.style.cursor = 'pointer';
           
-          const marker = new mapboxgl.Marker(el)
+          const marker = new mapboxgl.Marker({
+            element: el,
+            anchor: 'center',
+            offset: [0, 0]
+          })
             .setLngLat(eq.coordinates)
             .setPopup(
               new mapboxgl.Popup({ offset: 25 })
@@ -967,7 +1005,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
         `);
 
         // Create marker
-        const marker = new mapboxgl.Marker(el)
+        const marker = new mapboxgl.Marker({
+        element: el,
+        anchor: 'bottom'
+      })
           .setLngLat(contribution.coordinates)
           .setPopup(popup)
           .addTo(map.current!);
@@ -1020,69 +1061,14 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       const layerColor = layerEventsService.getLayerColor(event.layerType);
       const size = Math.round((25 + (event.magnitude * 3)) * 0.6); // Reduced by 40%
       
-      // Add number label for chronological order - fixed positioning
-      const numberLabel = document.createElement('div');
-      numberLabel.style.cssText = `
-        position: absolute;
-        top: -6px;
-        right: -6px;
-        width: 16px;
-        height: 16px;
-        background: white;
-        color: ${layerColor};
-        border-radius: 50%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        font-size: 9px;
-        font-weight: bold;
-        border: 2px solid ${layerColor};
-        z-index: 10;
-        pointer-events: none;
-      `;
-      numberLabel.textContent = String(index + 1);
-      
       el.style.cssText = `
-        width: ${size}px;
-        height: ${size}px;
+        width: 12px;
+        height: 12px;
         background: ${layerColor};
-        border: 3px solid white;
+        border: 1px solid white;
         border-radius: 50%;
         cursor: pointer;
-        box-shadow: 0 4px 15px rgba(0,0,0,0.4);
-        transition: box-shadow 0.3s, border-color 0.3s;
-        position: relative;
-        animation: pulse 2s ease-in-out infinite;
       `;
-      
-      // Create inner content container to avoid transform issues
-      const innerContent = document.createElement('div');
-      innerContent.style.cssText = `
-        width: 100%;
-        height: 100%;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        position: relative;
-      `;
-      
-      innerContent.appendChild(numberLabel);
-      
-      // Add event icon if available
-      if (event.icon) {
-        const icon = document.createElement('span');
-        icon.textContent = event.icon;
-        icon.style.cssText = `
-          font-size: ${size * 0.5}px;
-          display: flex;
-          align-items: center;
-          justify-content: center;
-          filter: grayscale(1) brightness(10);
-        `;
-        innerContent.appendChild(icon);
-      }
-      
-      el.appendChild(innerContent);
       
       // Add hover effect - only change shadow and border, NO transform
       el.addEventListener('mouseenter', () => {
@@ -1153,7 +1139,7 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       // Create marker with proper centering
       const marker = new mapboxgl.Marker({
         element: el,
-        anchor: 'center' // Center the marker on the coordinates
+        anchor: 'bottom'
       })
         .setLngLat(event.coordinates)
         .addTo(map.current!);
@@ -1273,49 +1259,14 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       const size = 20 + (event.magnitude * 3);
       
       el.style.cssText = `
-        width: ${size}px;
-        height: ${size}px;
+        width: 8px;
+        height: 8px;
         background: ${layerColor};
-        border: 3px solid white;
+        border: 1px solid white;
         border-radius: 50%;
         cursor: pointer;
-        display: flex;
-        align-items: center;
-        justify-content: center;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.3);
         opacity: ${opacity};
-        transition: all 0.3s;
-        position: relative;
       `;
-      
-      // Add pulse animation for events in current year
-      if (event.year === currentYear) {
-        el.style.animation = 'pulse 2s infinite';
-        el.innerHTML = `
-          <span style="font-size: ${size * 0.5}px;">${event.icon || '📍'}</span>
-          <div style="
-            position: absolute;
-            width: ${size * 2}px;
-            height: ${size * 2}px;
-            border: 2px solid ${layerColor};
-            border-radius: 50%;
-            animation: ripple 2s linear infinite;
-            opacity: 0.5;
-          "></div>
-        `;
-      } else {
-        el.innerHTML = `<span style="font-size: ${size * 0.4}px;">${event.icon || '📍'}</span>`;
-      }
-      
-      // Add hover effect
-      el.onmouseenter = () => {
-        el.style.transform = 'scale(1.3)';
-        el.style.zIndex = '1000';
-      };
-      el.onmouseleave = () => {
-        el.style.transform = 'scale(1)';
-        el.style.zIndex = 'auto';
-      };
 
       // Create detailed popup
       const popup = new mapboxgl.Popup({
@@ -1443,7 +1394,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       `);
 
       // Create marker
-      const marker = new mapboxgl.Marker(el)
+      const marker = new mapboxgl.Marker({
+        element: el,
+        anchor: 'bottom'
+      })
         .setLngLat(event.coordinates)
         .setPopup(popup)
         .addTo(map.current!);
@@ -1525,7 +1479,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
         });
 
         // Create marker
-        const marker = new mapboxgl.Marker(el)
+        const marker = new mapboxgl.Marker({
+        element: el,
+        anchor: 'bottom'
+      })
           .setLngLat(event.coordinates)
           .setPopup(
             new mapboxgl.Popup({ offset: 25 })
@@ -1842,7 +1799,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       `;
 
       // Add marker
-      searchMarker.current = new mapboxgl.Marker(markerEl)
+      searchMarker.current = new mapboxgl.Marker({
+        element: markerEl,
+        anchor: 'bottom'
+      })
         .setLngLat(coordinates)
         .addTo(map.current);
 
