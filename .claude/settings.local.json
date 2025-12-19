@@ -26,7 +26,8 @@
       "mcp__vercel__get_deployment_build_logs",
       "WebFetch(domain:localhost)",
       "Bash(npm run lint)",
-      "Bash(npx tsc:*)"
+      "Bash(npx tsc:*)",
+      "Bash(git log:*)"
     ],
     "deny": [],
     "ask": []

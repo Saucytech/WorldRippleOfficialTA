@@ -10,6 +10,7 @@ import { Invention } from '../services/inventionsApi';
 import { getEventsForYear, getNearestEvents } from '../services/timelineEvents';
 import { RippleManager, RippleEvent } from './RippleAnimation';
 import { earthquakeService } from '../services/earthquakeApi';
+import { openMeteoApi } from '../services/openMeteoApi';
 import { communityService } from '../services/communityService';
 import { layerEventsService, LayerEvent } from '../services/layerEvents';
 import { EventDetailCard } from './EventDetailCard';
@@ -386,7 +387,14 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
   const eventHandlers = useRef<Map<string, any>>(new Map());
   const yearMarkers = useRef<mapboxgl.Marker[]>([]);
   const [rippleEvents, setRippleEvents] = useState<RippleEvent[]>([]);
+  const [earthquakeCount, setEarthquakeCount] = useState<number>(0);
+  const [earthquakesLoading, setEarthquakesLoading] = useState<boolean>(false);
+  const [weatherCount, setWeatherCount] = useState<number>(0);
+  const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
   const earthquakeUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+  const weatherUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+  const earthquakeMarkers = useRef<mapboxgl.Marker[]>([]);
+  const weatherMarkers = useRef<mapboxgl.Marker[]>([]);
   const communityMarkers = useRef<mapboxgl.Marker[]>([]);
   const layerEventMarkers = useRef<mapboxgl.Marker[]>([]);
 
@@ -1530,6 +1538,322 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
     });
   }, [currentYear, mapLoaded]);
 
+  // Load and display real-time earthquake data
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    const loadEarthquakes = async () => {
+      try {
+        setEarthquakesLoading(true);
+        
+        // Clear existing earthquake markers
+        earthquakeMarkers.current.forEach(marker => marker.remove());
+        earthquakeMarkers.current = [];
+
+        // Fetch recent earthquakes (last 24 hours, magnitude 2.5+)
+        const earthquakes = await earthquakeService.getRecentEarthquakes('all_day');
+        
+        console.log(`Loading ${earthquakes.length} earthquakes from USGS...`);
+        setEarthquakeCount(earthquakes.filter(eq => eq.magnitude >= 3.0).length);
+
+        // Add markers for each earthquake
+        earthquakes.forEach(eq => {
+          // Only show earthquakes with magnitude 3.0+ for visibility
+          if (eq.magnitude < 3.0) return;
+
+          // Create marker element
+          const el = document.createElement('div');
+          el.className = 'earthquake-marker';
+          
+          // Size based on magnitude (bigger quake = bigger marker)
+          const size = Math.max(8, Math.min(40, eq.magnitude * 4));
+          
+          // Color based on depth (shallow = red, deep = yellow)
+          const color = eq.depth < 70 ? '#ff4444' : 
+                       eq.depth < 300 ? '#ff8844' : 
+                       '#ffaa44';
+          
+          el.style.cssText = `
+            width: ${size}px;
+            height: ${size}px;
+            background: ${color};
+            border: 1px solid white;
+            border-radius: 50%;
+            cursor: pointer;
+            opacity: 0.9;
+          `;
+
+          // Add magnitude label
+          if (eq.magnitude >= 5.0) {
+            const label = document.createElement('div');
+            label.style.cssText = `
+              position: absolute;
+              top: -20px;
+              left: 50%;
+              transform: translateX(-50%);
+              background: black;
+              color: white;
+              padding: 2px 4px;
+              border-radius: 3px;
+              font-size: 10px;
+              font-weight: bold;
+              white-space: nowrap;
+            `;
+            label.textContent = `M${eq.magnitude.toFixed(1)}`;
+            el.appendChild(label);
+          }
+
+          // Create marker
+          const marker = new mapboxgl.Marker({
+            element: el,
+            anchor: 'center'
+          })
+            .setLngLat(eq.coordinates)
+            .setPopup(
+              new mapboxgl.Popup({ offset: 25, className: 'earthquake-popup' })
+                .setHTML(`
+                  <div style="padding: 8px; background: #1f2937; border-radius: 6px;">
+                    <h3 style="margin: 0 0 8px 0; font-size: 14px; font-weight: bold; color: #ffffff;">
+                      Magnitude ${eq.magnitude.toFixed(1)} Earthquake
+                    </h3>
+                    <p style="margin: 4px 0; font-size: 12px; color: #d1d5db;">
+                      <strong style="color: #9ca3af;">Location:</strong> ${eq.place}<br>
+                      <strong style="color: #9ca3af;">Depth:</strong> ${eq.depth.toFixed(1)} km<br>
+                      <strong style="color: #9ca3af;">Time:</strong> ${new Date(eq.time).toLocaleString()}<br>
+                      ${eq.tsunami ? '<strong style="color: #ff6b6b;">⚠️ Tsunami Warning</strong><br>' : ''}
+                    </p>
+                    <a href="${eq.url}" target="_blank" style="font-size: 11px; color: #60a5fa; text-decoration: none;">
+                      View on USGS →
+                    </a>
+                  </div>
+                `)
+            )
+            .addTo(map.current!);
+
+          earthquakeMarkers.current.push(marker);
+
+          // Add ripple effect for significant earthquakes
+          if (eq.magnitude >= 5.0) {
+            setRippleEvents(prev => [...prev, {
+              id: `earthquake-${eq.id}`,
+              coordinates: eq.coordinates,
+              type: 'disaster',
+              magnitude: eq.magnitude / 2,
+              timestamp: Date.now(),
+              color: '#ff4444'
+            }]);
+          }
+        });
+
+        console.log(`Added ${earthquakeMarkers.current.length} earthquake markers to map`);
+        setEarthquakesLoading(false);
+      } catch (error) {
+        console.error('Failed to load earthquake data:', error);
+        setEarthquakesLoading(false);
+      }
+    };
+
+    // Load earthquakes immediately
+    loadEarthquakes();
+
+    // Refresh every 5 minutes (USGS updates every 5 minutes)
+    earthquakeUpdateInterval.current = setInterval(loadEarthquakes, 5 * 60 * 1000);
+
+    return () => {
+      if (earthquakeUpdateInterval.current) {
+        clearInterval(earthquakeUpdateInterval.current);
+      }
+      earthquakeMarkers.current.forEach(marker => marker.remove());
+      earthquakeMarkers.current = [];
+    };
+  }, [mapLoaded]);
+
+  // Load and display real-time weather data
+  useEffect(() => {
+    if (!map.current || !mapLoaded) return;
+
+    // Major world cities to show weather for
+    const cities = [
+      { name: 'New York', lat: 40.7128, lon: -74.0060 },
+      { name: 'London', lat: 51.5074, lon: -0.1278 },
+      { name: 'Paris', lat: 48.8566, lon: 2.3522 },
+      { name: 'Tokyo', lat: 35.6762, lon: 139.6503 },
+      { name: 'Beijing', lat: 39.9042, lon: 116.4074 },
+      { name: 'Sydney', lat: -33.8688, lon: 151.2093 },
+      { name: 'Moscow', lat: 55.7558, lon: 37.6173 },
+      { name: 'Dubai', lat: 25.2048, lon: 55.2708 },
+      { name: 'Singapore', lat: 1.3521, lon: 103.8198 },
+      { name: 'Mumbai', lat: 19.0760, lon: 72.8777 },
+      { name: 'São Paulo', lat: -23.5505, lon: -46.6333 },
+      { name: 'Cairo', lat: 30.0444, lon: 31.2357 },
+      { name: 'Los Angeles', lat: 34.0522, lon: -118.2437 },
+      { name: 'Mexico City', lat: 19.4326, lon: -99.1332 },
+      { name: 'Lagos', lat: 6.5244, lon: 3.3792 },
+      { name: 'Bangkok', lat: 13.7563, lon: 100.5018 },
+      { name: 'Buenos Aires', lat: -34.6037, lon: -58.3816 },
+      { name: 'Seoul', lat: 37.5665, lon: 126.9780 },
+      { name: 'Jakarta', lat: -6.2088, lon: 106.8456 },
+      { name: 'Cape Town', lat: -33.9249, lon: 18.4241 }
+    ];
+
+    const loadWeather = async () => {
+      try {
+        setWeatherLoading(true);
+        
+        // Clear existing weather markers
+        weatherMarkers.current.forEach(marker => marker.remove());
+        weatherMarkers.current = [];
+
+        console.log(`Loading weather for ${cities.length} cities...`);
+        let loadedCount = 0;
+
+        // Load weather for each city
+        for (const city of cities) {
+          try {
+            const weather = await openMeteoApi.getCurrentWeather(city.lat, city.lon);
+            
+            if (!weather || !weather.current) continue;
+
+            loadedCount++;
+            
+            // Create weather marker element
+            const el = document.createElement('div');
+            el.className = 'weather-marker';
+            
+            // Choose icon based on weather condition
+            const temp = weather.current.temperature_2m;
+            const precipitation = weather.current.precipitation || 0;
+            const windSpeed = weather.current.wind_speed_10m || 0;
+            
+            // Weather icon logic
+            let weatherIcon = '☀️'; // Default sunny
+            let weatherCondition = 'Clear';
+            
+            if (precipitation > 5) {
+              weatherIcon = '🌧️';
+              weatherCondition = 'Heavy Rain';
+            } else if (precipitation > 1) {
+              weatherIcon = '🌦️';
+              weatherCondition = 'Light Rain';
+            } else if (weather.current.cloud_cover > 80) {
+              weatherIcon = '☁️';
+              weatherCondition = 'Cloudy';
+            } else if (weather.current.cloud_cover > 40) {
+              weatherIcon = '⛅';
+              weatherCondition = 'Partly Cloudy';
+            } else if (temp < 0) {
+              weatherIcon = '❄️';
+              weatherCondition = 'Freezing';
+            } else if (temp > 30) {
+              weatherIcon = '🌡️';
+              weatherCondition = 'Hot';
+            }
+            
+            // Color based on temperature
+            const tempColor = temp < 0 ? '#4fc3f7' :
+                             temp < 10 ? '#81c784' :
+                             temp < 20 ? '#fff176' :
+                             temp < 30 ? '#ffb74d' :
+                             '#ff7043';
+            
+            el.style.cssText = `
+              width: 36px;
+              height: 36px;
+              background: ${tempColor}20;
+              border: 2px solid ${tempColor};
+              border-radius: 50%;
+              display: flex;
+              align-items: center;
+              justify-content: center;
+              font-size: 20px;
+              cursor: pointer;
+              box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+            `;
+            
+            el.innerHTML = weatherIcon;
+            
+            // Create marker
+            const marker = new mapboxgl.Marker({
+              element: el,
+              anchor: 'center'
+            })
+              .setLngLat([city.lon, city.lat])
+              .setPopup(
+                new mapboxgl.Popup({ offset: 25, className: 'weather-popup' })
+                  .setHTML(`
+                    <div style="padding: 10px; background: #1f2937; border-radius: 8px; min-width: 200px;">
+                      <h3 style="margin: 0 0 8px 0; font-size: 16px; font-weight: bold; color: #ffffff;">
+                        ${city.name}
+                      </h3>
+                      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 8px;">
+                        <span style="font-size: 32px;">${weatherIcon}</span>
+                        <div>
+                          <div style="font-size: 24px; font-weight: bold; color: ${tempColor};">
+                            ${temp.toFixed(1)}°C
+                          </div>
+                          <div style="font-size: 12px; color: #9ca3af;">
+                            ${weatherCondition}
+                          </div>
+                        </div>
+                      </div>
+                      <div style="font-size: 12px; color: #d1d5db; border-top: 1px solid #374151; padding-top: 8px;">
+                        <div style="margin: 2px 0;">
+                          <span style="color: #9ca3af;">Feels like:</span> ${weather.current.apparent_temperature?.toFixed(1) || temp.toFixed(1)}°C
+                        </div>
+                        <div style="margin: 2px 0;">
+                          <span style="color: #9ca3af;">Wind:</span> ${windSpeed.toFixed(1)} km/h
+                        </div>
+                        <div style="margin: 2px 0;">
+                          <span style="color: #9ca3af;">Humidity:</span> ${weather.current.relative_humidity_2m || 0}%
+                        </div>
+                        ${precipitation > 0 ? `
+                          <div style="margin: 2px 0;">
+                            <span style="color: #9ca3af;">Rain:</span> ${precipitation.toFixed(1)} mm
+                          </div>
+                        ` : ''}
+                      </div>
+                      <div style="font-size: 10px; color: #6b7280; margin-top: 8px; padding-top: 8px; border-top: 1px solid #374151;">
+                        Updated: ${new Date().toLocaleTimeString()}
+                      </div>
+                    </div>
+                  `)
+              )
+              .addTo(map.current!);
+
+            weatherMarkers.current.push(marker);
+            
+            // Add small delay to avoid rate limiting
+            await new Promise(resolve => setTimeout(resolve, 100));
+            
+          } catch (error) {
+            console.error(`Failed to load weather for ${city.name}:`, error);
+          }
+        }
+
+        setWeatherCount(loadedCount);
+        console.log(`Loaded weather for ${loadedCount} cities`);
+        setWeatherLoading(false);
+      } catch (error) {
+        console.error('Failed to load weather data:', error);
+        setWeatherLoading(false);
+      }
+    };
+
+    // Load weather immediately
+    loadWeather();
+
+    // Refresh every 10 minutes (weather changes more slowly than earthquakes)
+    weatherUpdateInterval.current = setInterval(loadWeather, 10 * 60 * 1000);
+
+    return () => {
+      if (weatherUpdateInterval.current) {
+        clearInterval(weatherUpdateInterval.current);
+      }
+      weatherMarkers.current.forEach(marker => marker.remove());
+      weatherMarkers.current = [];
+    };
+  }, [mapLoaded]);
+
   // Handle search result display
   useEffect(() => {
     console.log('MapInterface searchResult changed:', searchResult);
@@ -1966,6 +2290,51 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       
       {/* Ripple animations overlay - only render when map is loaded */}
       {mapLoaded && <RippleManager events={rippleEvents} map={map.current} />}
+
+      {/* Real-time Data Status */}
+      <div className="absolute top-4 right-4 space-y-2 z-10">
+        {/* Earthquake Status */}
+        <div className="bg-gray-900 bg-opacity-90 text-white p-3 rounded-lg shadow-lg">
+          <div className="flex items-center space-x-2">
+            <div className={`w-2 h-2 rounded-full ${earthquakesLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+            <span className="text-sm font-semibold">Live Earthquakes (USGS)</span>
+          </div>
+          {earthquakeCount > 0 && (
+            <div className="text-xs text-gray-300 mt-1">
+              🌍 {earthquakeCount} quakes (M3.0+) in last 24h
+            </div>
+          )}
+          {earthquakesLoading && (
+            <div className="text-xs text-yellow-300 mt-1">
+              Loading real-time data...
+            </div>
+          )}
+          <div className="text-xs text-gray-400 mt-1">
+            Auto-updates every 5 minutes
+          </div>
+        </div>
+        
+        {/* Weather Status */}
+        <div className="bg-gray-900 bg-opacity-90 text-white p-3 rounded-lg shadow-lg">
+          <div className="flex items-center space-x-2">
+            <div className={`w-2 h-2 rounded-full ${weatherLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+            <span className="text-sm font-semibold">Live Weather (OpenMeteo)</span>
+          </div>
+          {weatherCount > 0 && (
+            <div className="text-xs text-gray-300 mt-1">
+              🌤️ {weatherCount} major cities monitored
+            </div>
+          )}
+          {weatherLoading && (
+            <div className="text-xs text-yellow-300 mt-1">
+              Loading weather data...
+            </div>
+          )}
+          <div className="text-xs text-gray-400 mt-1">
+            Auto-updates every 10 minutes
+          </div>
+        </div>
+      </div>
 
       {/* Event Detail Card - shows when a category is selected */}
       {selectedCategoryEvents && onClearCategoryEvents && (

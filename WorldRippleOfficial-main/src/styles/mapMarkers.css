@@ -67,3 +67,26 @@
 .layer-event-popup .mapboxgl-popup-tip {
   border-top-color: #1f2937;
 }
+
+/* Earthquake popup styling */
+.earthquake-popup .mapboxgl-popup-content {
+  background: #1f2937;
+  border: 1px solid #374151;
+  color: white;
+  padding: 0;
+  border-radius: 8px;
+  box-shadow: 0 10px 40px rgba(0,0,0,0.7);
+}
+
+.earthquake-popup .mapboxgl-popup-tip {
+  border-top-color: #1f2937;
+}
+
+.earthquake-popup .mapboxgl-popup-close-button {
+  color: #9ca3af;
+}
+
+.earthquake-popup .mapboxgl-popup-close-button:hover {
+  color: #ffffff;
+  background-color: rgba(255, 255, 255, 0.1);
+}
