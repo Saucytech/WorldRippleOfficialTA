@@ -12,6 +12,7 @@ import { Invention, getAllInventions } from './services/inventionsApi';
 import { historyService } from './services/historyApi';
 import { supabase } from './lib/supabase';
 import { ApiTestPanel } from './components/ApiTestPanel';
+import { LiveModePanel } from './components/LiveModePanel';
 import mapboxgl from 'mapbox-gl';
 
 interface SearchResult {

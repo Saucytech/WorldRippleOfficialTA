@@ -1,0 +1,80 @@
+/* Custom Mapbox Popup Styles */
+.mapboxgl-popup {
+  max-width: 300px !important;
+}
+
+.mapboxgl-popup-content {
+  background: rgba(17, 24, 39, 0.95) !important; /* Dark background with transparency */
+  border: 1px solid rgba(59, 130, 246, 0.5) !important; /* Blue border */
+  border-radius: 8px !important;
+  padding: 0 !important;
+  box-shadow: 0 10px 25px rgba(0, 0, 0, 0.5) !important;
+}
+
+.mapboxgl-popup-close-button {
+  color: #9CA3AF !important;
+  font-size: 20px !important;
+  padding: 4px 8px !important;
+  right: 4px !important;
+  top: 4px !important;
+}
+
+.mapboxgl-popup-close-button:hover {
+  color: #F3F4F6 !important;
+  background-color: rgba(75, 85, 99, 0.5) !important;
+  border-radius: 4px;
+}
+
+.mapboxgl-popup-tip {
+  border-top-color: rgba(17, 24, 39, 0.95) !important;
+}
+
+/* Popup Content Styling */
+.earthquake-popup,
+.weather-popup,
+.country-popup {
+  padding: 12px !important;
+  color: #E5E7EB !important;
+  background: transparent !important;
+}
+
+.earthquake-popup h3,
+.weather-popup h3,
+.country-popup h3 {
+  color: #F3F4F6 !important;
+  font-weight: 600 !important;
+  margin: 0 0 8px 0 !important;
+  font-size: 16px !important;
+}
+
+.earthquake-popup p,
+.weather-popup p,
+.country-popup p {
+  color: #D1D5DB !important;
+  margin: 4px 0 !important;
+  font-size: 14px !important;
+}
+
+/* Icon colors in popups */
+.earthquake-popup .icon {
+  color: #EF4444 !important; /* Red for earthquakes */
+}
+
+.weather-popup .icon {
+  color: #3B82F6 !important; /* Blue for weather */
+}
+
+.country-popup .icon {
+  color: #10B981 !important; /* Green for countries */
+}
+
+/* Data values in popups */
+.popup-value {
+  color: #60A5FA !important;
+  font-weight: 500 !important;
+}
+
+.popup-label {
+  color: #9CA3AF !important;
+  font-size: 12px !important;
+}

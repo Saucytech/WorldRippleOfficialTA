@@ -10,7 +10,7 @@ import { Invention } from '../services/inventionsApi';
 import { getEventsForYear, getNearestEvents } from '../services/timelineEvents';
 import { RippleManager, RippleEvent } from './RippleAnimation';
 import { earthquakeService } from '../services/earthquakeApi';
-import { openMeteoApi } from '../services/openMeteoApi';
+import openMeteoService from '../services/openMeteoApi';
 import { communityService } from '../services/communityService';
 import { layerEventsService, LayerEvent } from '../services/layerEvents';
 import { EventDetailCard } from './EventDetailCard';
@@ -389,14 +389,24 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
   const [rippleEvents, setRippleEvents] = useState<RippleEvent[]>([]);
   const [earthquakeCount, setEarthquakeCount] = useState<number>(0);
   const [earthquakesLoading, setEarthquakesLoading] = useState<boolean>(false);
+  const [showEarthquakes, setShowEarthquakes] = useState<boolean>(true);
   const [weatherCount, setWeatherCount] = useState<number>(0);
   const [weatherLoading, setWeatherLoading] = useState<boolean>(false);
+  const [showWeather, setShowWeather] = useState<boolean>(true);
+  const [liveMode, setLiveMode] = useState<boolean>(false);
+  const [currentLiveEvent, setCurrentLiveEvent] = useState<any>(null);
   const earthquakeUpdateInterval = useRef<NodeJS.Timeout | null>(null);
   const weatherUpdateInterval = useRef<NodeJS.Timeout | null>(null);
+  const liveModeInterval = useRef<NodeJS.Timeout | null>(null);
+  const liveModeQueue = useRef<any[]>([]);
+  const lastEventTime = useRef<number>(Date.now());
   const earthquakeMarkers = useRef<mapboxgl.Marker[]>([]);
+  const earthquakeData = useRef<any[]>([]);
   const weatherMarkers = useRef<mapboxgl.Marker[]>([]);
+  const weatherData = useRef<any[]>([]);
   const communityMarkers = useRef<mapboxgl.Marker[]>([]);
   const layerEventMarkers = useRef<mapboxgl.Marker[]>([]);
+  const liveModePopup = useRef<mapboxgl.Popup | null>(null);
 
   // Initialize Mapbox - only once
   useEffect(() => {
@@ -1546,9 +1556,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       try {
         setEarthquakesLoading(true);
         
-        // Clear existing earthquake markers
+        // Clear existing earthquake markers and data
         earthquakeMarkers.current.forEach(marker => marker.remove());
         earthquakeMarkers.current = [];
+        earthquakeData.current = [];
 
         // Fetch recent earthquakes (last 24 hours, magnitude 2.5+)
         const earthquakes = await earthquakeService.getRecentEarthquakes('all_day');
@@ -1627,10 +1638,15 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
                     </a>
                   </div>
                 `)
-            )
-            .addTo(map.current!);
+            );
+            
+          // Only add to map if earthquakes are enabled
+          if (showEarthquakes) {
+            marker.addTo(map.current!);
+          }
 
           earthquakeMarkers.current.push(marker);
+          earthquakeData.current.push(eq);
 
           // Add ripple effect for significant earthquakes
           if (eq.magnitude >= 5.0) {
@@ -1700,9 +1716,10 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       try {
         setWeatherLoading(true);
         
-        // Clear existing weather markers
+        // Clear existing weather markers and data
         weatherMarkers.current.forEach(marker => marker.remove());
         weatherMarkers.current = [];
+        weatherData.current = [];
 
         console.log(`Loading weather for ${cities.length} cities...`);
         let loadedCount = 0;
@@ -1710,7 +1727,7 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
         // Load weather for each city
         for (const city of cities) {
           try {
-            const weather = await openMeteoApi.getCurrentWeather(city.lat, city.lon);
+            const weather = await openMeteoService.getCurrentWeather(city.lat, city.lon);
             
             if (!weather || !weather.current) continue;
 
@@ -1749,28 +1766,19 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
               weatherCondition = 'Hot';
             }
             
-            // Color based on temperature
-            const tempColor = temp < 0 ? '#4fc3f7' :
-                             temp < 10 ? '#81c784' :
-                             temp < 20 ? '#fff176' :
-                             temp < 30 ? '#ffb74d' :
-                             '#ff7043';
+            // Blue color for all weather markers
+            const weatherColor = '#4a90e2';
             
             el.style.cssText = `
-              width: 36px;
-              height: 36px;
-              background: ${tempColor}20;
-              border: 2px solid ${tempColor};
+              width: 12px;
+              height: 12px;
+              background: ${weatherColor};
+              border: 2px solid white;
               border-radius: 50%;
-              display: flex;
-              align-items: center;
-              justify-content: center;
-              font-size: 20px;
               cursor: pointer;
-              box-shadow: 0 2px 8px rgba(0,0,0,0.3);
+              box-shadow: 0 2px 8px rgba(0,0,0,0.5);
+              opacity: 0.9;
             `;
-            
-            el.innerHTML = weatherIcon;
             
             // Create marker
             const marker = new mapboxgl.Marker({
@@ -1817,10 +1825,19 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
                       </div>
                     </div>
                   `)
-              )
-              .addTo(map.current!);
+              );
+              
+            // Only add to map if weather is enabled
+            if (showWeather) {
+              marker.addTo(map.current!);
+            }
 
             weatherMarkers.current.push(marker);
+            weatherData.current.push({
+              ...weather,
+              cityName: city.name,
+              coordinates: [city.lon, city.lat]
+            });
             
             // Add small delay to avoid rate limiting
             await new Promise(resolve => setTimeout(resolve, 100));
@@ -1853,6 +1870,300 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       weatherMarkers.current = [];
     };
   }, [mapLoaded]);
+
+  // Toggle earthquake markers visibility
+  useEffect(() => {
+    if (!map.current) return;
+    
+    earthquakeMarkers.current.forEach(marker => {
+      if (showEarthquakes) {
+        marker.addTo(map.current!);
+      } else {
+        marker.remove();
+      }
+    });
+  }, [showEarthquakes]);
+
+  // Toggle weather markers visibility
+  useEffect(() => {
+    if (!map.current) return;
+    
+    weatherMarkers.current.forEach(marker => {
+      if (showWeather) {
+        marker.addTo(map.current!);
+      } else {
+        marker.remove();
+      }
+    });
+  }, [showWeather]);
+
+  // Live Mode functionality - cycle through new events
+  useEffect(() => {
+    if (!map.current || !mapLoaded || !liveMode) {
+      // Clean up when Live Mode is turned off
+      if (liveModeInterval.current) {
+        clearInterval(liveModeInterval.current);
+        liveModeInterval.current = null;
+      }
+      if (liveModePopup.current) {
+        liveModePopup.current.remove();
+        liveModePopup.current = null;
+      }
+      setCurrentLiveEvent(null);
+      return;
+    }
+
+    // Function to collect all current events with real data
+    const collectLiveEvents = () => {
+      const events = [];
+      
+      // Add earthquakes to the queue with actual data
+      if (showEarthquakes && earthquakeData.current.length > 0) {
+        earthquakeData.current.forEach((eq, index) => {
+          events.push({
+            type: 'Earthquake',
+            coordinates: eq.coordinates,
+            title: `Magnitude ${eq.magnitude.toFixed(1)} Earthquake`,
+            location: eq.place,
+            depth: eq.depth,
+            time: eq.time,
+            tsunami: eq.tsunami,
+            felt: eq.felt,
+            significance: eq.significance,
+            url: eq.url,
+            description: 'Real-time seismic activity',
+            color: '#ff4444',
+            timestamp: Date.now() + index * 100
+          });
+        });
+      }
+
+      // Add weather events to the queue with actual data
+      if (showWeather && weatherData.current.length > 0) {
+        weatherData.current.slice(0, 10).forEach((weather, index) => {
+          const temp = weather.current?.temperature_2m || 0;
+          const humidity = weather.current?.relative_humidity_2m || 0;
+          const windSpeed = weather.current?.wind_speed_10m || 0;
+          const precipitation = weather.current?.precipitation || 0;
+          
+          events.push({
+            type: 'Weather',
+            coordinates: weather.coordinates,
+            title: `${weather.cityName} Weather`,
+            location: weather.cityName,
+            temperature: temp,
+            humidity: humidity,
+            windSpeed: windSpeed,
+            precipitation: precipitation,
+            description: `${temp.toFixed(1)}°C, ${humidity}% humidity`,
+            color: '#4a90e2',
+            timestamp: Date.now() + 500 + index * 100
+          });
+        });
+      }
+
+      return events.sort((a, b) => a.timestamp - b.timestamp);
+    };
+
+    // Function to show next event
+    const showNextEvent = () => {
+      // Collect fresh events
+      const allEvents = collectLiveEvents();
+      
+      if (allEvents.length === 0) {
+        setCurrentLiveEvent(null);
+        return;
+      }
+
+      // Get next event from queue
+      let nextEvent;
+      if (liveModeQueue.current.length > 0) {
+        nextEvent = liveModeQueue.current.shift();
+      } else {
+        // Refill queue with new events
+        liveModeQueue.current = [...allEvents];
+        nextEvent = liveModeQueue.current.shift();
+      }
+
+      if (!nextEvent || !map.current) return;
+
+      setCurrentLiveEvent(nextEvent);
+
+      // Remove previous popup
+      if (liveModePopup.current) {
+        liveModePopup.current.remove();
+      }
+
+      // Fly to the event location
+      map.current.flyTo({
+        center: nextEvent.coordinates,
+        zoom: 6,
+        duration: 2000,
+        essential: true
+      });
+
+      // Create popup for the event with detailed information
+      let popupContent = '';
+      
+      if (nextEvent.type === 'Earthquake') {
+        const timeString = new Date(nextEvent.time).toLocaleString();
+        popupContent = `
+          <div style="
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            border: 2px solid ${nextEvent.color};
+            border-radius: 8px;
+            padding: 14px;
+            min-width: 280px;
+            max-width: 350px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+          ">
+            <div style="
+              display: flex;
+              align-items: center;
+              margin-bottom: 10px;
+            ">
+              <div style="
+                width: 10px;
+                height: 10px;
+                background: ${nextEvent.color};
+                border-radius: 50%;
+                margin-right: 10px;
+                animation: pulse 1s infinite;
+              "></div>
+              <h3 style="
+                color: white;
+                margin: 0;
+                font-size: 18px;
+                font-weight: bold;
+              ">
+                ${nextEvent.title}
+              </h3>
+            </div>
+            <div style="color: #d1d5db; font-size: 14px;">
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">📍 Location:</strong> ${nextEvent.location}
+              </div>
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">⏰ Time:</strong> ${timeString}
+              </div>
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">📊 Depth:</strong> ${nextEvent.depth.toFixed(1)} km
+              </div>
+              ${nextEvent.felt ? `
+                <div style="margin: 6px 0;">
+                  <strong style="color: #9ca3af;">👥 Felt Reports:</strong> ${nextEvent.felt}
+                </div>
+              ` : ''}
+              ${nextEvent.tsunami ? `
+                <div style="margin: 6px 0; color: #ff6b6b;">
+                  ⚠️ <strong>Tsunami Warning</strong>
+                </div>
+              ` : ''}
+            </div>
+            <div style="
+              color: #60a5fa;
+              font-size: 12px;
+              margin-top: 10px;
+              padding-top: 10px;
+              border-top: 1px solid #374151;
+              display: flex;
+              justify-content: space-between;
+              align-items: center;
+            ">
+              <span>🔴 Live Mode Active</span>
+              <a href="${nextEvent.url}" target="_blank" style="color: #60a5fa; text-decoration: none;">
+                USGS →
+              </a>
+            </div>
+          </div>
+        `;
+      } else if (nextEvent.type === 'Weather') {
+        popupContent = `
+          <div style="
+            background: linear-gradient(135deg, #1f2937 0%, #111827 100%);
+            border: 2px solid ${nextEvent.color};
+            border-radius: 8px;
+            padding: 14px;
+            min-width: 260px;
+            box-shadow: 0 0 20px rgba(0,0,0,0.8);
+          ">
+            <div style="
+              display: flex;
+              align-items: center;
+              margin-bottom: 10px;
+            ">
+              <div style="
+                width: 10px;
+                height: 10px;
+                background: ${nextEvent.color};
+                border-radius: 50%;
+                margin-right: 10px;
+                animation: pulse 1s infinite;
+              "></div>
+              <h3 style="
+                color: white;
+                margin: 0;
+                font-size: 18px;
+                font-weight: bold;
+              ">
+                ${nextEvent.title}
+              </h3>
+            </div>
+            <div style="color: #d1d5db; font-size: 14px;">
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">🌡️ Temperature:</strong> ${nextEvent.temperature.toFixed(1)}°C / ${(nextEvent.temperature * 9/5 + 32).toFixed(1)}°F
+              </div>
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">💧 Humidity:</strong> ${nextEvent.humidity}%
+              </div>
+              <div style="margin: 6px 0;">
+                <strong style="color: #9ca3af;">💨 Wind:</strong> ${nextEvent.windSpeed.toFixed(1)} km/h
+              </div>
+              ${nextEvent.precipitation > 0 ? `
+                <div style="margin: 6px 0;">
+                  <strong style="color: #9ca3af;">🌧️ Precipitation:</strong> ${nextEvent.precipitation.toFixed(1)} mm
+                </div>
+              ` : ''}
+            </div>
+            <div style="
+              color: #60a5fa;
+              font-size: 12px;
+              margin-top: 10px;
+              padding-top: 10px;
+              border-top: 1px solid #374151;
+            ">
+              🔴 Live Mode Active - Real-time Weather
+            </div>
+          </div>
+        `;
+      }
+      
+      liveModePopup.current = new mapboxgl.Popup({
+        closeOnClick: false,
+        closeButton: false,
+        offset: 25,
+        className: 'live-mode-popup'
+      })
+        .setLngLat(nextEvent.coordinates)
+        .setHTML(popupContent)
+        .addTo(map.current);
+    };
+
+    // Start Live Mode cycle
+    showNextEvent(); // Show first event immediately
+    
+    // Set up interval to cycle through events every 5 seconds
+    liveModeInterval.current = setInterval(showNextEvent, 5000);
+
+    return () => {
+      if (liveModeInterval.current) {
+        clearInterval(liveModeInterval.current);
+      }
+      if (liveModePopup.current) {
+        liveModePopup.current.remove();
+      }
+    };
+  }, [liveMode, mapLoaded, showEarthquakes, showWeather]);
 
   // Handle search result display
   useEffect(() => {
@@ -2291,48 +2602,106 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
       {/* Ripple animations overlay - only render when map is loaded */}
       {mapLoaded && <RippleManager events={rippleEvents} map={map.current} />}
 
-      {/* Real-time Data Status */}
-      <div className="absolute top-4 right-4 space-y-2 z-10">
+      {/* Real-time Data Status - positioned in bottom right where Active Regions was */}
+      <div className="absolute bottom-20 right-6 space-y-2 z-10">
+        {/* Live Mode Control */}
+        <div className="bg-gray-900 bg-opacity-90 text-white p-3 rounded-lg shadow-lg">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full ${liveMode ? 'bg-red-500 animate-pulse' : 'bg-gray-500'}`} />
+              <span className="text-sm font-semibold">Live Mode</span>
+            </div>
+            <button
+              onClick={() => setLiveMode(!liveMode)}
+              className={`px-3 py-1 text-xs rounded transition-all ${
+                liveMode 
+                  ? 'bg-red-600 hover:bg-red-700 text-white animate-pulse' 
+                  : 'bg-gray-600 hover:bg-gray-700 text-gray-300'
+              }`}
+            >
+              {liveMode ? 'LIVE' : 'OFF'}
+            </button>
+          </div>
+          {liveMode && (
+            <div className="text-xs text-gray-300 mt-2">
+              🎯 Auto-focusing on new events
+              {currentLiveEvent && (
+                <div className="text-yellow-300 mt-1">
+                  Viewing: {currentLiveEvent.type}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        
         {/* Earthquake Status */}
         <div className="bg-gray-900 bg-opacity-90 text-white p-3 rounded-lg shadow-lg">
-          <div className="flex items-center space-x-2">
-            <div className={`w-2 h-2 rounded-full ${earthquakesLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
-            <span className="text-sm font-semibold">Live Earthquakes (USGS)</span>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full ${earthquakesLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+              <span className="text-sm font-semibold">Live Earthquakes</span>
+            </div>
+            <button
+              onClick={() => setShowEarthquakes(!showEarthquakes)}
+              className={`px-2 py-1 text-xs rounded transition-colors ${
+                showEarthquakes 
+                  ? 'bg-red-600 hover:bg-red-700 text-white' 
+                  : 'bg-gray-600 hover:bg-gray-700 text-gray-300'
+              }`}
+            >
+              {showEarthquakes ? 'ON' : 'OFF'}
+            </button>
           </div>
-          {earthquakeCount > 0 && (
+          {showEarthquakes && earthquakeCount > 0 && (
             <div className="text-xs text-gray-300 mt-1">
               🌍 {earthquakeCount} quakes (M3.0+) in last 24h
             </div>
           )}
-          {earthquakesLoading && (
+          {showEarthquakes && earthquakesLoading && (
             <div className="text-xs text-yellow-300 mt-1">
               Loading real-time data...
             </div>
           )}
-          <div className="text-xs text-gray-400 mt-1">
-            Auto-updates every 5 minutes
-          </div>
+          {showEarthquakes && (
+            <div className="text-xs text-gray-400 mt-1">
+              Auto-updates every 5 minutes
+            </div>
+          )}
         </div>
         
         {/* Weather Status */}
         <div className="bg-gray-900 bg-opacity-90 text-white p-3 rounded-lg shadow-lg">
-          <div className="flex items-center space-x-2">
-            <div className={`w-2 h-2 rounded-full ${weatherLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
-            <span className="text-sm font-semibold">Live Weather (OpenMeteo)</span>
+          <div className="flex items-center justify-between mb-2">
+            <div className="flex items-center space-x-2">
+              <div className={`w-2 h-2 rounded-full ${weatherLoading ? 'bg-yellow-500 animate-pulse' : 'bg-green-500'}`} />
+              <span className="text-sm font-semibold">Live Weather</span>
+            </div>
+            <button
+              onClick={() => setShowWeather(!showWeather)}
+              className={`px-2 py-1 text-xs rounded transition-colors ${
+                showWeather 
+                  ? 'bg-blue-600 hover:bg-blue-700 text-white' 
+                  : 'bg-gray-600 hover:bg-gray-700 text-gray-300'
+              }`}
+            >
+              {showWeather ? 'ON' : 'OFF'}
+            </button>
           </div>
-          {weatherCount > 0 && (
+          {showWeather && weatherCount > 0 && (
             <div className="text-xs text-gray-300 mt-1">
               🌤️ {weatherCount} major cities monitored
             </div>
           )}
-          {weatherLoading && (
+          {showWeather && weatherLoading && (
             <div className="text-xs text-yellow-300 mt-1">
               Loading weather data...
             </div>
           )}
-          <div className="text-xs text-gray-400 mt-1">
-            Auto-updates every 10 minutes
-          </div>
+          {showWeather && (
+            <div className="text-xs text-gray-400 mt-1">
+              Auto-updates every 10 minutes
+            </div>
+          )}
         </div>
       </div>
 
@@ -2371,41 +2740,7 @@ export const MapInterface: React.FC<MapInterfaceProps> = React.memo(({
         <div className="text-sm text-gray-400">Current Timeline</div>
       </div>
 
-      <div className="absolute top-6 right-6 bg-black/70 backdrop-blur-sm px-4 py-2 rounded-lg border border-gray-700 z-10">
-        <div className="text-lg font-semibold text-white">
-          {dataLayers.filter(l => l.isActive).length}
-        </div>
-        <div className="text-sm text-gray-400">Active Layers</div>
-        {realData.size > 0 && (
-          <div className="text-xs text-green-400 mt-1">Real Data</div>
-        )}
-      </div>
 
-      <div className="absolute bottom-20 right-6 bg-black/70 backdrop-blur-sm p-4 rounded-lg border border-gray-700 max-w-xs z-10">
-        <h3 className="text-sm font-semibold text-white mb-2">Active Regions</h3>
-        <div className="space-y-1">
-          {dataLayers.filter(layer => layer.isActive).slice(0, 4).map(layer => {
-            const boundaries = GEOGRAPHICAL_BOUNDARIES[layer.id as keyof typeof GEOGRAPHICAL_BOUNDARIES];
-            const regionCount = boundaries ? Object.keys(boundaries).length : 0;
-            
-            return (
-              <div key={layer.id} className="flex items-center justify-between text-xs">
-                <div
-                  className="w-3 h-3 rounded-full"
-                  style={{ backgroundColor: layer.color }}
-                />
-                <span className="text-gray-300">{layer.name}</span>
-                <span className="text-gray-500">{regionCount} regions</span>
-              </div>
-            );
-          })}
-          {dataLayers.filter(layer => layer.isActive).length > 4 && (
-            <div className="text-xs text-gray-500">
-              +{dataLayers.filter(layer => layer.isActive).length - 4} more
-            </div>
-          )}
-        </div>
-      </div>
     </div>
   );
 }, (prevProps, nextProps) => {
